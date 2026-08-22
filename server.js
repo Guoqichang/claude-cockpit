@@ -193,10 +193,43 @@ const wss = new WebSocketServer({ noServer: true });
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-function wireUpgrade(srv, requireAuth) {
+function headerOrigin(req) {
+  const raw = req.headers.origin;
+  if (!raw || raw === 'null') return '';
+  try { return new URL(raw).origin; } catch { return ''; }
+}
+
+function localWsOrigins() {
+  return new Set([
+    `http://127.0.0.1:${PORT}`,
+    `http://localhost:${PORT}`,
+  ]);
+}
+
+function publicWsOrigins() {
+  const base = (readConfig().publicUrl || '').trim();
+  if (!base) return new Set();
+  try { return new Set([new URL(base).origin]); } catch { return new Set(); }
+}
+
+function originAllowed(req, mode) {
+  const origin = headerOrigin(req);
+  if (!origin) return false;
+  if (mode === 'local') return localWsOrigins().has(origin);
+  if (mode === 'public') return publicWsOrigins().has(origin);
+  return false;
+}
+
+function wireUpgrade(srv, { requireAuth, originMode }) {
   srv.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://x');
     if (url.pathname !== '/ws') { socket.destroy(); return; }
+    if (!originAllowed(req, originMode)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      log('ws rejected (origin)', req.headers.origin || '(none)');
+      return;
+    }
     if (requireAuth) {
       const key = clientKey(req);
       if (isLocked(key) || !checkToken(req, url)) {
@@ -211,8 +244,8 @@ function wireUpgrade(srv, requireAuth) {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 }
-wireUpgrade(server, false);
-wireUpgrade(authServer, true);
+wireUpgrade(server, { requireAuth: false, originMode: 'local' });
+wireUpgrade(authServer, { requireAuth: true, originMode: 'public' });
 
 wss.on('connection', (ws, req) => {
   log('ws connect', req.socket.remoteAddress);
