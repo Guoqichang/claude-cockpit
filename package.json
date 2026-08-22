@@ -1,0 +1,24 @@
+{
+  "name": "claude-cockpit",
+  "version": "0.1.0",
+  "description": "Local web cockpit for Claude Code: session browser, markdown chat, embedded terminal, SSH remote",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "dompurify": "^3.2.0",
+    "express": "^4.21.0",
+    "katex": "^0.18.1",
+    "marked": "^15.0.0",
+    "mermaid": "^11.16.1",
+    "node-pty": "^1.0.0",
+    "qrcode": "^1.5.4",
+    "ssh2": "^1.16.0",
+    "web-push": "^3.6.7",
+    "ws": "^8.18.0"
+  }
+}

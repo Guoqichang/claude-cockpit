@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Cockpit</string>
+    <!-- 由 build.sh 从 ~/.claude-cockpit/{config,auth}.json 注入 -->
+    <string name="default_url">https://cockpit.verdictfinance.top/</string>
+</resources>
