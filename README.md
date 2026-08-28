@@ -27,6 +27,7 @@ plist 在 `~/Library/LaunchAgents/com.looperhome.claude-cockpit.plist`：`PATH` 
 | SSH 远程 | 「SSH」按钮 | ssh2 密码认证，连上后可跑远程 claude |
 | 运行状态灯 | 侧栏绿点 | 解析 `ps` 里的 `--resume=<id>` 判断进程持有 + JSONL mtime 判断是否在写；亮绿脉冲=正在跑，暗绿空心=打开但空闲 |
 | 置顶 session | 侧栏条目悬停出现图钉 | 顺序存 `~/.claude-cockpit/pins.json`（服务端，跨浏览器/标签一致）；置顶项聚到顶部「置顶」组，不在原项目组重复出现 |
+| 会话重命名 | 侧栏条目 ✎ 按钮 / 双击标题 | 自定义名存 `~/.claude-cockpit/names.json`（600），**不改 Claude/Cursor 自己的会话文件**；在 `session-router.js` 单点收口，两种引擎与推送通知统一生效；留空恢复自动标题，改过的条目带 ✎ 角标、悬停可见原标题 |
 | 临时换模型 | 输入框打 `@` | `@haiku 问题…` 只对这一条生效，下拉框的默认模型不动；有自动补全（下拉里的 ID + `opus/sonnet/haiku/fable` 别名），气泡下方标注「本轮使用 X」，排队消息也支持 |
 | 发图片 | 输入框粘贴 / 拖入 / 回形针按钮 | 有附件时改用 `--input-format stream-json`，把 `{type:'image',source:{base64}}` 内容块写进 stdin（真视觉输入，不走 Read 工具）；前端超 1568px 长边先 canvas 降采样 |
 

@@ -35,9 +35,9 @@ body {
   background: none; border: none; color: var(--fg-dim); font-size: 16px; cursor: pointer;
 }
 .side-head button:hover { color: var(--gold); }
-.side-actions { display: flex; gap: 6px; padding: 0 14px 10px; }
+.side-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 14px 10px; }
 .side-actions button {
-  flex: 1; padding: 6px 0; background: var(--bg-panel); color: var(--fg);
+  padding: 6px 0; background: var(--bg-panel); color: var(--fg);
   border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 12px;
 }
 .side-actions button:hover { border-color: var(--gold-dim); color: var(--gold); }
@@ -74,13 +74,26 @@ body {
 }
 .pin-btn:hover { color: var(--gold); opacity: 1 !important; }
 .sess-item.pinned .pin-btn { opacity: 1; color: var(--gold-dim); }
+.ren-btn { margin-right: -2px; }
+/* a renamed session shows a faint mark so the auto title isn't silently lost */
+.sess-item.renamed .sess-title::after {
+  content: '✎'; font-size: 9px; color: var(--gold-dim); margin-left: 5px; vertical-align: 1px;
+}
+#chat-title, #mobile-title { cursor: text; }
 .pinned-group .proj-name { color: var(--gold-dim); letter-spacing: .5px; }
 .pinned-group { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 6px; }
 .sess-item:hover, .term-item:hover { background: var(--bg-hover); }
 .sess-item.active, .term-item.active { background: var(--bg-hover); border-left-color: var(--gold); }
 .sess-title {
   font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px; min-width: 0;
 }
+.engine-badge {
+  flex: 0 0 auto; font-size: 10px; line-height: 1.2; padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--fg-dim); letter-spacing: .2px;
+}
+.engine-badge.cursor { color: #7eb8ff; border-color: #3a5070; }
+.engine-badge.claude { color: var(--gold-dim); border-color: #5a4a28; }
 .live-dot {
   display: none; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 6px; vertical-align: 1px; flex: 0 0 auto;

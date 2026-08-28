@@ -5,7 +5,8 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
-import { listProjects, readSession, findSessionMeta } from './lib/sessions.js';
+import { listProjects, readSession, findSessionMeta } from './lib/session-router.js';
+import { allNames, setName } from './lib/names.js';
 import { startChat, subscribe, stopChat, hasChat, listChats, restoreChats, onChatDone } from './lib/chat.js';
 import { listCommands } from './lib/commands.js';
 import { getActive } from './lib/active.js';
@@ -158,6 +159,20 @@ app.get('/api/commands', (req, res) => {
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+// custom session titles (empty name = revert to the auto title)
+app.get('/api/names', (req, res) => {
+  try { res.json(allNames()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/names/:id', (req, res) => {
+  try {
+    const id = String(req.params.id || '');
+    if (!/^[\w.-]{1,128}$/.test(id)) throw new Error('bad session id');
+    const name = setName(id, req.body?.name);
+    res.json({ ok: true, id, name });
+  } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+
 // pinned session ids, order = display order
 const PINS_FILE = path.join(os.homedir(), '.claude-cockpit', 'pins.json');
 
@@ -280,7 +295,7 @@ wss.on('connection', (ws, req) => {
       if (hasChat(ch)) { bind(ch, 0); return; }
       try {
         startChat(ch, { cwd: m.cwd, resume: m.resume, permissionMode: m.permissionMode, prompt: m.prompt,
-                        model: m.model, attachments: m.attachments, provider: m.provider });
+                        model: m.model, attachments: m.attachments, provider: m.provider, engine: m.engine });
       } catch (e) {
         send({ op: 'chat.error', ch, error: String(e.message || e) });
         send({ op: 'chat.done', ch, code: -1, stderr: '' });

@@ -348,18 +348,23 @@ function showChatView(key) {
   const v = chatViews.get(key);
   $('#chat-title').textContent = v.title || '新会话';
   $('#mobile-title').textContent = v.title || '新会话';
-  $('#chat-sub').textContent = `${v.cwd || '~'}${v.id ? '  ·  ' + v.id : ''}`;
+  const eng = v.engine === 'cursor' ? 'Cursor' : 'Claude';
+  $('#chat-sub').textContent = `${eng}${v.cwd ? '  ·  ' + v.cwd : ''}${v.id ? '  ·  ' + v.id : ''}`;
   switchView('chat');
   updateComposer(v);
   messagesRoot.scrollTop = messagesRoot.scrollHeight;
 }
 
 function updateComposer(v) {
+  const isCursor = v?.engine === 'cursor';
+  syncModelSelector(v?.engine || 'claude');
   $('#btn-send').textContent = v.running ? '排队' : '发送';
   $('#btn-stop').hidden = !v.running;
   $('#input').placeholder = v.running
     ? '当前轮运行中——输入后 Enter 排队，本轮结束自动发送'
-    : '输入消息，Enter 发送，Shift+Enter 换行';
+    : (isCursor ? '输入消息发给 Cursor Agent，Enter 发送' : '输入消息，Enter 发送，Shift+Enter 换行');
+  $('#btn-attach').hidden = isCursor;
+  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor);
 }
 
 function enqueue(v, text, atts = [], model = null) {
@@ -468,8 +473,12 @@ async function openSession(slug, id) {
   const res = await fetch(`/api/session/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`);
   const data = await res.json();
   if (data.error) { alert('读取会话失败: ' + data.error); return; }
-  const v = getOrCreateChatView(key, { slug, id, cwd: data.cwd, title: data.title || '(无标题)' });
+  const proj = projectsCache.find(p => p.slug === slug);
+  const engine = data.engine || proj?.engine || 'claude';
+  const v = getOrCreateChatView(key, { slug, id, cwd: data.cwd, title: data.title || '(无标题)', engine });
   v.id0 = id;                 // original file id, used for history paging even after resume forks
+  v.renamed = !!data.renamed;
+  v.autoTitle = data.autoTitle || '';
   v.firstIndex = data.start;
   v.total = data.total;       // watermark for cross-device sync
   v.bytes = data.bytes;
@@ -503,7 +512,11 @@ async function syncSession(v) {
     v.el.appendChild(renderPage(v, fresh));
     v.total = data.total;
     if (data.title && data.title !== v.title) {
+      // the server already resolved a custom name if one exists, so this cannot
+      // clobber a rename — it only picks up a newly generated auto title
       v.title = data.title;
+      v.renamed = !!data.renamed;
+      if (data.autoTitle) v.autoTitle = data.autoTitle;
       if (currentChatKey === v.key) { $('#chat-title').textContent = data.title; $('#mobile-title').textContent = data.title; }
     }
     if (atBottom && currentChatKey === v.key) messagesRoot.scrollTop = messagesRoot.scrollHeight;
@@ -526,18 +539,25 @@ async function adoptLiveTurn(v) {
   attachChat(v, live.ch, { fresh: true });
 }
 
-function newChat(cwd) {
+function newChat(cwd, engine = 'claude') {
   const key = 'new-' + (++chSeq);
-  getOrCreateChatView(key, { slug: null, id: null, cwd: cwd || '', title: '新会话' });
+  getOrCreateChatView(key, {
+    slug: null, id: null, cwd: cwd || '', engine,
+    title: engine === 'cursor' ? '新 Cursor 会话' : '新 Claude 会话',
+  });
   showChatView(key);
   markActiveSession(null);
   $('#input').focus();
 }
 
+function engineLabel(v) {
+  return v?.engine === 'cursor' ? 'agent' : 'claude';
+}
+
 function appendSpinner(v) {
   const s = document.createElement('div');
   s.className = 'spinner';
-  s.textContent = '● claude 运行中…';
+  s.textContent = `● ${engineLabel(v)} 运行中…`;
   v.el.appendChild(s);
   return s;
 }
@@ -571,7 +591,7 @@ function clearLive(v) {
 function spinnerLabel(v, spinner) {
   const st = liveState(v);
   const secs = Math.round((Date.now() - st.startedAt) / 1000);
-  const model = v.runningModel || 'claude';
+  const model = v.runningModel || engineLabel(v);
   const parts = [`● ${model}`];
   if (st.tool) parts.push(`正在用 ${st.tool}`);
   else parts.push('运行中');
@@ -728,6 +748,10 @@ function sendMessage() {
 }
 
 function dispatch(v, text, atts = [], oneShotModel = null) {
+  if (v.engine === 'cursor' && atts.length) {
+    alert('Cursor Agent 暂不支持 Cockpit 图片输入');
+    return;
+  }
   const blocks = atts.map(a => ({ type: 'image', url: a.url }));
   if (text) blocks.push({ type: 'text', text });
   renderBlocks(v.el, 'user', blocks, v.toolMap);
@@ -737,21 +761,21 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
     tag.textContent = `本轮使用 ${oneShotModel}`;
     v.el.appendChild(tag);
   }
-  warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
+  if (v.engine !== 'cursor') warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
   // globally unique channel id: survives page refreshes and multiple tabs
   const ch = 'c' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
   attachChat(v, ch, {
-    start: { cwd: v.cwd || undefined, resume: v.id || undefined,
+    start: { cwd: v.cwd || undefined, resume: v.id || undefined, engine: v.engine || 'claude',
              prompt: text || '（见附图）',
              attachments: atts.map(a => ({ mediaType: a.mediaType, data: a.data })),
              permissionMode: $('#perm-mode').value,
-             ...resolveModelChoice(oneShotModel || $('#model-sel').value) },
+             ...resolveModelChoice(oneShotModel || $('#model-sel').value, v.engine) },
   });
 }
 
 function attachChat(v, ch, { start, fresh } = {}) {
   const spinner = appendSpinner(v);
-  spinner.textContent = fresh ? '● 接管后台运行中的轮次…' : '● claude 运行中…';
+  spinner.textContent = fresh ? '● 接管后台运行中的轮次…' : `● ${engineLabel(v)} 运行中…`;
   v.spinner = spinner;
   if (currentChatKey === v.key) messagesRoot.scrollTop = messagesRoot.scrollHeight;
 
@@ -787,9 +811,11 @@ function attachChat(v, ch, { start, fresh } = {}) {
       v.evCount++;
       const e = m.event;
       if (e.type === 'system' && e.subtype === 'init') {
-        v.runningModel = e.model || 'claude';
+        v.runningModel = e.model || engineLabel(v);
         liveState(v).startedAt = Date.now();
         spinnerLabel(v, spinner);
+      } else if (e.type === 'thinking' && e.subtype === 'delta' && e.text) {
+        handleStreamEvent(v, spinner, { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: e.text } });
       } else if (e.type === 'stream_event') {
         handleStreamEvent(v, spinner, e.event);
       } else if (e.type === 'assistant' || e.type === 'user') {
@@ -801,7 +827,10 @@ function attachChat(v, ch, { start, fresh } = {}) {
       } else if (e.type === 'result') {
         if (e.session_id) {
           v.id = e.session_id;
-          if (currentChatKey === v.key) $('#chat-sub').textContent = `${v.cwd || '~'}  ·  ${v.id}`;
+          if (currentChatKey === v.key) {
+            const eng = v.engine === 'cursor' ? 'Cursor' : 'Claude';
+            $('#chat-sub').textContent = `${eng}${v.cwd ? '  ·  ' + v.cwd : ''}  ·  ${v.id}`;
+          }
         }
         const line = document.createElement('div');
         line.className = 'result-line';
@@ -857,7 +886,7 @@ function attachChat(v, ch, { start, fresh } = {}) {
       } else if (m.code !== 0 && m.stderr) {
         const err = document.createElement('div');
         err.className = 'error-line';
-        err.textContent = `claude 退出码 ${m.code}\n` + explainError(m.stderr.slice(-2000));
+        err.textContent = `${engineLabel(v)} 退出码 ${m.code}\n` + explainError(m.stderr.slice(-2000));
         v.el.appendChild(err);
       }
       v.running = false; v.ch = null;
@@ -923,13 +952,14 @@ const MODEL_ALIASES = [
 ];
 
 function modelChoices() {
+  const eng = chatViews.get(currentChatKey)?.engine || 'claude';
   const fromSel = [...$('#model-sel').querySelectorAll('option')]
-    .filter(o => o.value && o.value !== '__custom__')
+    .filter(o => o.value && o.value !== '__custom__' && !o.hidden)
     .map(o => ({ name: o.value, desc: o.textContent }));
-  // let "@mimo" / "@deepseek" match the provider entries by their labels too
-  const provAliases = providers.map(p => ({ name: 'provider:' + p.id, desc: p.label, alias: p.id }));
+  const provAliases = eng === 'cursor' ? [] : providers.map(p => ({ name: 'provider:' + p.id, desc: p.label, alias: p.id }));
+  const aliases = eng === 'cursor' ? [] : MODEL_ALIASES;
   const seen = new Set(fromSel.map(m => m.name));
-  return [...fromSel, ...provAliases.filter(p => !seen.has(p.name)), ...MODEL_ALIASES.filter(m => !seen.has(m.name))];
+  return [...fromSel, ...provAliases.filter(p => !seen.has(p.name)), ...aliases.filter(m => !seen.has(m.name))];
 }
 
 let menuMode = 'slash';
@@ -998,17 +1028,39 @@ $('#input').addEventListener('keydown', (e) => {
 });
 $('#perm-mode').addEventListener('change', () => localStorage.setItem('permMode', $('#perm-mode').value));
 if (localStorage.getItem('permMode')) $('#perm-mode').value = localStorage.getItem('permMode');
-// Keeps an ad-hoc model id (new release, alias like "opus") selectable without a code change
-function addModelOption(id, label) {
+function modelStorageKey(engine) {
+  return 'model:' + (engine === 'cursor' ? 'cursor' : 'claude');
+}
+
+function syncModelSelector(engine) {
+  const eng = engine === 'cursor' ? 'cursor' : 'claude';
+  const sel = $('#model-sel');
+  for (const el of sel.querySelectorAll('.model-claude, .model-cursor')) {
+    el.hidden = el.classList.contains('model-cursor') ? eng !== 'cursor' : eng === 'cursor';
+  }
+  for (const opt of sel.querySelectorAll('option[data-engine]')) {
+    opt.hidden = opt.dataset.engine !== eng;
+  }
+  let saved = localStorage.getItem(modelStorageKey(eng));
+  if (!saved && eng === 'claude') saved = localStorage.getItem('model'); // migrate legacy key
+  const pick = (v) => v && [...sel.options].some(o => o.value === v && !o.hidden);
+  if (pick(saved)) sel.value = saved;
+  else if (!pick(sel.value) || sel.value.startsWith('provider:')) sel.value = '';
+}
+
+// Keeps an ad-hoc model id selectable without a code change
+function addModelOption(id, label, engine) {
+  const eng = engine || chatViews.get(currentChatKey)?.engine || 'claude';
   const sel = $('#model-sel');
   if ([...sel.options].some(o => o.value === id)) return;
   const opt = document.createElement('option');
   opt.value = id;
   opt.textContent = label || id;
+  opt.dataset.engine = eng === 'cursor' ? 'cursor' : 'claude';
   sel.insertBefore(opt, sel.querySelector('option[value="__custom__"]'));
 }
 
-// third-party gateways (MiMo / DeepSeek / …) appear as "provider:<id>" entries
+// third-party gateways (MiMo / DeepSeek / …) appear as "provider:<id>" entries — Claude only
 let providers = [];
 
 async function loadProviders() {
@@ -1016,6 +1068,8 @@ async function loadProviders() {
   catch { return; }
   const sel = $('#model-sel');
   const group = document.createElement('optgroup');
+  group.id = 'og-providers';
+  group.className = 'model-claude';
   group.label = '其他模型（第三方网关）';
   for (const p of providers) {
     const opt = document.createElement('option');
@@ -1026,14 +1080,17 @@ async function loadProviders() {
     group.appendChild(opt);
   }
   if (providers.length) sel.insertBefore(group, sel.querySelector('option[value="__custom__"]'));
-  const saved = localStorage.getItem('model');
-  if (saved) $('#model-sel').value = saved;
+  syncModelSelector(chatViews.get(currentChatKey)?.engine || 'claude');
 }
 loadProviders();
 
-// split "provider:<id>" into what chat.start needs
-function resolveModelChoice(value) {
+// split dropdown value into what chat.start needs; providers never apply to Cursor
+function resolveModelChoice(value, engine) {
   if (!value) return {};
+  if (engine === 'cursor') {
+    if (value.startsWith('provider:')) return {};
+    return { model: value };
+  }
   if (value.startsWith('provider:')) return { provider: value.slice(9) };
   return { model: value };
 }
@@ -1054,17 +1111,24 @@ function warnIfContextTooBig(v, choice) {
 
 $('#model-sel').addEventListener('change', () => {
   const sel = $('#model-sel');
+  const eng = chatViews.get(currentChatKey)?.engine || 'claude';
+  const key = modelStorageKey(eng);
   if (sel.value === '__custom__') {
-    const id = (prompt('模型 ID 或别名（如 claude-opus-5 / opus / fable）:', '') || '').trim();
-    if (!id) { sel.value = localStorage.getItem('model') || ''; return; }
-    addModelOption(id);
+    const hint = eng === 'cursor'
+      ? 'Cursor 模型 ID（如 composer-2.5 / claude-opus-5-thinking-high）:'
+      : '模型 ID 或别名（如 claude-opus-5 / opus / fable）:';
+    const id = (prompt(hint, '') || '').trim();
+    if (!id) { sel.value = localStorage.getItem(key) || localStorage.getItem('model') || ''; return; }
+    addModelOption(id, null, eng);
     sel.value = id;
   }
-  localStorage.setItem('model', sel.value);
+  localStorage.setItem(key, sel.value);
 });
 
-const savedModel = localStorage.getItem('model');
-if (savedModel) { addModelOption(savedModel); $('#model-sel').value = savedModel; }
+const savedClaude = localStorage.getItem('model:claude') || localStorage.getItem('model');
+if (savedClaude) { addModelOption(savedClaude, null, 'claude'); }
+const savedCursor = localStorage.getItem('model:cursor');
+if (savedCursor) { addModelOption(savedCursor, null, 'cursor'); }
 
 // ---------------- jump to bottom ----------------
 const jumpBtn = document.createElement('button');
@@ -1107,12 +1171,69 @@ function savePins() {
     .catch(() => { /* retried on next toggle */ });
 }
 
+// ---------------- rename ----------------
+async function renameSession(s) {
+  const current = s.renamed ? s.title : '';
+  const auto = s.renamed ? (s.autoTitle || '') : s.title;
+  const input = prompt(`会话新名字（留空恢复自动标题）\n自动标题：${auto}`, current || s.title || '');
+  if (input === null) return;
+  const name = input.trim() === (s.title || '').trim() && !s.renamed ? '' : input.trim();
+  try {
+    const res = await fetch('/api/names/' + encodeURIComponent(s.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.error) { alert('重命名失败：' + data.error); return; }
+    applyRename(s.id, data.name);
+  } catch (e) { alert('重命名失败：' + e); }
+}
+
+// patch caches in place so the new name shows without a full reload
+function applyRename(id, name) {
+  for (const p of projectsCache) {
+    for (const sess of p.sessions) {
+      if (sess.id !== id) continue;
+      if (name) {
+        if (!sess.renamed) sess.autoTitle = sess.title;
+        sess.title = name; sess.renamed = true;
+      } else {
+        sess.title = sess.autoTitle || sess.title;
+        sess.renamed = false; delete sess.autoTitle;
+      }
+    }
+  }
+  for (const [, v] of chatViews) {
+    if (v.id !== id && v.id0 !== id) continue;
+    if (name) { if (!v.renamed) v.autoTitle = v.title; v.title = name; v.renamed = true; }
+    else { v.title = v.autoTitle || v.title; v.renamed = false; }
+    if (currentChatKey === v.key) {
+      $('#chat-title').textContent = v.title;
+      $('#mobile-title').textContent = v.title;
+    }
+  }
+  renderSessionList();
+}
+
+// double-click the header title (or the mobile top bar) to rename the open session
+function renameCurrentSession() {
+  const v = chatViews.get(currentChatKey);
+  if (!v?.id) { alert('这个会话还没有 id（首轮跑完才会有），暂时不能改名'); return; }
+  renameSession({ id: v.id0 || v.id, title: v.title, renamed: !!v.renamed, autoTitle: v.autoTitle });
+}
+$('#chat-title').addEventListener('dblclick', renameCurrentSession);
+$('#mobile-title').addEventListener('dblclick', renameCurrentSession);
+
 function togglePin(id) {
   const i = pins.indexOf(id);
   if (i >= 0) pins.splice(i, 1); else pins.unshift(id);
   savePins();
   renderSessionList();
 }
+
+const PENCIL_SVG = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">'
+  + '<path d="M11.6 1.8l2.6 2.6-1.5 1.5-2.6-2.6 1.5-1.5zM9.2 4.2l2.6 2.6-6.3 6.3-3.3.7.7-3.3 6.3-6.3z" '
+  + 'fill="currentColor"/></svg>';
 
 const PIN_SVG = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">'
   + '<path d="M6.2 1.5h3.6l-.5 1.1v3l2.6 2.4v1.1H8.7L8 14.5l-.7-5.4H4.1V8l2.6-2.4v-3z" '
@@ -1128,7 +1249,12 @@ function makeSessionItem(p, s) {
   t.className = 'sess-title';
   const dot = document.createElement('span');
   dot.className = 'live-dot';
+  const badge = document.createElement('span');
+  const eng = s.engine || p.engine || 'claude';
+  badge.className = 'engine-badge ' + eng;
+  badge.textContent = eng === 'cursor' ? 'CR' : 'CC';
   t.appendChild(dot);
+  t.appendChild(badge);
   t.appendChild(document.createTextNode(s.title));
   t.title = s.title;
 
@@ -1142,10 +1268,17 @@ function makeSessionItem(p, s) {
   pin.title = pins.includes(s.id) ? '取消置顶' : '置顶';
   pin.addEventListener('click', (e) => { e.stopPropagation(); togglePin(s.id); });
 
+  const ren = document.createElement('button');
+  ren.className = 'pin-btn ren-btn';
+  ren.innerHTML = PENCIL_SVG;
+  ren.title = s.renamed ? `重命名（自动标题：${s.autoTitle || ''}）` : '重命名';
+  if (s.renamed) item.classList.add('renamed');
+  ren.addEventListener('click', (e) => { e.stopPropagation(); renameSession(s); });
+
   const body = document.createElement('div');
   body.className = 'sess-body';
   body.append(t, meta);
-  item.append(body, pin);
+  item.append(body, ren, pin);
   item.addEventListener('click', () => openSession(p.slug, s.id));
   return item;
 }
@@ -1183,7 +1316,8 @@ function renderSessionList() {
     g.className = 'proj-group';
     const name = document.createElement('div');
     name.className = 'proj-name';
-    name.textContent = p.cwd || p.slug;
+    const prefix = p.engine === 'cursor' ? 'Cursor · ' : '';
+    name.textContent = prefix + (p.cwd || p.slug);
     name.title = p.cwd || p.slug;
     g.appendChild(name);
     for (const s of sessions) g.appendChild(makeSessionItem(p, s));
@@ -1281,7 +1415,12 @@ async function pollActive() {
       if (!v.slug) {
         // a brand-new chat only learns its slug once the file lands in the sidebar
         for (const p of projectsCache) {
-          if (p.sessions.some(s => s.id === v.id)) { v.slug = p.slug; v.id0 = v.id; break; }
+          if (p.sessions.some(s => s.id === v.id)) {
+            v.slug = p.slug;
+            v.id0 = v.id;
+            v.engine = p.engine || v.engine || 'claude';
+            break;
+          }
         }
       }
       if (!v.running && activeState.working.has(v.id)) { adoptLiveTurn(v); continue; }
@@ -1346,7 +1485,7 @@ async function renderRunning() {
     const meta = c.sessionId ? titleOf(c.sessionId) : null;
     rows.push({ kind: 'cockpit', id: c.sessionId, slug: meta?.slug, ch: c.ch,
                 title: meta?.title || '新会话', cwd: c.cwd, since: c.startedAt, model: c.model,
-                activity: c.activity });
+                engine: c.engine, activity: c.activity });
   }
   const own = new Set(rows.map(r => r.id));
   for (const id of active.working || []) {
@@ -1387,7 +1526,7 @@ async function renderRunning() {
     const meta = document.createElement('div');
     meta.className = 'run-card-meta';
     meta.textContent = r.kind === 'cockpit'
-      ? `${fmtDur(Date.now() - r.since)} · ${r.model || '默认模型'} · Cockpit`
+      ? `${fmtDur(Date.now() - r.since)} · ${r.model || '默认模型'} · ${r.engine === 'cursor' ? 'Cursor' : 'Cockpit'}`
       : '在 VSCode / 终端中运行';
     card.append(top, meta);
     if (r.activity) {
@@ -1531,13 +1670,19 @@ $('#btn-new-term').addEventListener('click', () => {
 $('#btn-close-term').addEventListener('click', () => { if (activeTermCh) closeTerminal(activeTermCh); });
 
 // ---------------- new chat dialog ----------------
-$('#btn-new-chat').addEventListener('click', () => {
+function openNewChatDialog(engine) {
   const f = $('#newchat-form');
   f.cwd.value = chatViews.get(currentChatKey)?.cwd || projectsCache[0]?.cwd || '';
+  f.engine.value = engine;
   $('#newchat-dialog').showModal();
-});
+}
+$('#btn-new-chat').addEventListener('click', () => openNewChatDialog('claude'));
+$('#btn-new-cursor').addEventListener('click', () => openNewChatDialog('cursor'));
 $('#newchat-dialog').addEventListener('close', () => {
-  if ($('#newchat-dialog').returnValue === 'ok') newChat($('#newchat-form').cwd.value.trim());
+  if ($('#newchat-dialog').returnValue === 'ok') {
+    const f = $('#newchat-form');
+    newChat(f.cwd.value.trim(), f.engine.value || 'claude');
+  }
 });
 
 // ---------------- ssh dialog ----------------
