@@ -76,7 +76,18 @@ body {
   .pin-btn { opacity: .3; }
 }
 .pin-btn:hover { color: var(--gold); opacity: 1 !important; }
-.sess-item.pinned .pin-btn { opacity: 1; color: var(--gold-dim); }
+/* pinned sessions glow: gold edge + soft wash, like the fluorescent running dot */
+.sess-item.pinned {
+  border-left-color: var(--gold);
+  background: linear-gradient(90deg, rgba(201,164,92,.13), rgba(201,164,92,.02) 65%, transparent);
+  box-shadow: inset 3px 0 10px -3px rgba(201,164,92,.65);
+}
+.sess-item.pinned:hover { background: var(--bg-hover); }
+.sess-item.pinned .sess-title { color: #efe3c6; }
+.sess-item.pinned .pin-btn {
+  opacity: 1; color: var(--gold);
+  filter: drop-shadow(0 0 4px rgba(201,164,92,.9));
+}
 .ren-btn { margin-right: -2px; }
 /* a renamed session shows a faint mark so the auto title isn't silently lost */
 .sess-item.renamed .sess-title::after {
@@ -531,6 +542,10 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 @keyframes gspin { to { transform: rotate(360deg); } }
 .ring-err { fill: none; stroke: var(--err); stroke-width: 1.8; opacity: .85; }
 .ring-open { fill: none; stroke: #39ff88; stroke-width: 1.2; opacity: .4; stroke-dasharray: 3 3; }
+.ring-pin {
+  fill: none; stroke: var(--gold); stroke-width: 1.7; opacity: .95;
+  filter: drop-shadow(0 0 3px rgba(201,164,92,.9));
+}
 
 #graph-card {
   position: absolute; width: 292px; z-index: 5;
@@ -571,6 +586,7 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 #graph-legend .lg.ring-loop { border-color: #6db3ff; border-style: dotted; animation: none; }
 #graph-legend .lg.ring-err { border-color: var(--err); }
 #graph-legend .lg.ring-open { border-color: rgba(57,255,136,.45); border-style: dashed; }
+#graph-legend .lg.ring-pin { border-color: var(--gold); filter: none; }
 #graph-legend .lg-note { color: #6f6857; }
 
 @media (max-width: 860px) {

@@ -331,6 +331,7 @@
         transform: `translate(${b.x.toFixed(1)},${b.y.toFixed(1)})`,
       });
 
+      if (n.pinned) g.appendChild(el('circle', { r: b.r + 6, class: 'ring-pin' }));
       if (n.state === 'running') g.appendChild(el('circle', { r: b.r + 7, class: 'ring-run' }));
       if (n.goal) g.appendChild(el('circle', { r: b.r + 4, class: 'ring-goal' }));
       if (n.loop) g.appendChild(el('circle', { r: b.r + 4, class: 'ring-loop' }));
@@ -437,6 +438,7 @@
       <div><span class="lg ring-loop"></span>loop</div>
       <div><span class="lg ring-err"></span>报错</div>
       <div><span class="lg ring-open"></span>别处打开</div>
+      <div><span class="lg ring-pin"></span>置顶</div>
       <div class="lg-note">大小 = 轮数×新鲜度 · 颜色/图标 = 主题 · 滚轮缩放 · 拖拽平移</div>`;
   }
 
