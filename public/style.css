@@ -59,7 +59,10 @@ body {
 .sess-item, .term-item {
   padding: 7px 14px; cursor: pointer; border-left: 2px solid transparent;
 }
-.sess-item { display: flex; align-items: flex-start; gap: 6px; }
+/* each session carries its map color on the left edge (active keeps gold) */
+.sess-item { display: flex; align-items: flex-start; gap: 7px; border-left-color: var(--sess-color, transparent); }
+.sess-chip { flex: 0 0 auto; margin-top: 2px; opacity: .92; }
+.sess-chip svg { display: block; }
 .sess-body { min-width: 0; flex: 1; }
 .pin-btn {
   flex: 0 0 auto; background: none; border: none; padding: 2px; margin-top: 1px;
@@ -490,9 +493,20 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 #graph-head button { background: none; border: none; color: var(--fg-dim); font-size: 15px; cursor: pointer; }
 #graph-head button:hover { color: var(--gold); }
 
-#graph-stage { flex: 1; position: relative; overflow: hidden; background:
+#graph-stage { flex: 1; position: relative; overflow: hidden; touch-action: none; background:
   radial-gradient(ellipse at 50% 40%, #1c1916 0%, var(--bg) 70%); }
-#graph-svg { width: 100%; height: 100%; display: block; }
+#graph-svg { width: 100%; height: 100%; display: block; cursor: grab; }
+#graph-svg:active { cursor: grabbing; }
+
+#graph-zoom {
+  position: absolute; right: 14px; bottom: 14px; z-index: 6;
+  display: flex; flex-direction: column; gap: 6px;
+}
+#graph-zoom button {
+  width: 34px; height: 34px; border-radius: 9px; cursor: pointer; font-size: 16px; line-height: 1;
+  background: rgba(31,28,24,.92); color: var(--fg-dim); border: 1px solid var(--border);
+}
+#graph-zoom button:hover { color: var(--gold); border-color: var(--gold-dim); }
 
 .gnode { cursor: pointer; }
 .gnode .body { stroke: rgba(0,0,0,.35); stroke-width: 1; transition: opacity .2s; }

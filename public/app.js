@@ -1401,11 +1401,39 @@ const PIN_SVG = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="tr
   + '<path d="M6.2 1.5h3.6l-.5 1.1v3l2.6 2.4v1.1H8.7L8 14.5l-.7-5.4H4.1V8l2.6-2.4v-3z" '
   + 'fill="currentColor"/></svg>';
 
+// per-session color + icon comes from /api/graph (same identity as the map view)
+let graphMeta = new Map();
+
+window.applyGraphMeta = (nodes) => {
+  let changed = nodes.length !== graphMeta.size;
+  const m = new Map();
+  for (const n of nodes) {
+    m.set(n.id, { color: n.color, icon: n.icon });
+    const old = graphMeta.get(n.id);
+    if (!old || old.color !== n.color || old.icon !== n.icon) changed = true;
+  }
+  graphMeta = m;
+  if (changed) renderSessionList();
+};
+
+async function loadGraphMeta() {
+  try {
+    const d = await (await fetch('/api/graph')).json();
+    if (d.nodes) window.applyGraphMeta(d.nodes);
+  } catch { /* sidebar just stays neutral until the next refresh */ }
+}
+
 function makeSessionItem(p, s) {
   const item = document.createElement('div');
   item.className = 'sess-item';
   item.dataset.sessId = s.id;
   if (pins.includes(s.id)) item.classList.add('pinned');
+
+  const gm = graphMeta.get(s.id);
+  if (gm) item.style.setProperty('--sess-color', gm.color);
+  const chip = document.createElement('span');
+  chip.className = 'sess-chip';
+  if (window.CockpitIcons) chip.innerHTML = CockpitIcons.html(gm?.icon, 18, gm?.color);
 
   const t = document.createElement('div');
   t.className = 'sess-title';
@@ -1440,7 +1468,7 @@ function makeSessionItem(p, s) {
   const body = document.createElement('div');
   body.className = 'sess-body';
   body.append(t, meta);
-  item.append(body, ren, pin);
+  item.append(chip, body, ren, pin);
   item.addEventListener('click', () => openSession(p.slug, s.id));
   return item;
 }
@@ -1495,8 +1523,9 @@ function markActiveSession(id) {
 }
 
 $('#filter').addEventListener('input', renderSessionList);
-$('#btn-refresh').addEventListener('click', loadProjects);
+$('#btn-refresh').addEventListener('click', () => { loadProjects(); loadGraphMeta(); });
 loadPins().then(loadProjects).then(() => {
+  loadGraphMeta();
   // deep link from a push notification: /?session=<slug>/<id>
   const q = new URLSearchParams(location.search).get('session');
   if (q && q.includes('/')) {
