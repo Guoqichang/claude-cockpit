@@ -273,12 +273,29 @@ details.tool pre, details.thinking .think-body {
   border: 1px solid var(--border); overflow: hidden; background: var(--bg-panel);
 }
 .attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.attach-thumb .x {
+.attach-thumb .x, .attach-file .x {
   position: absolute; top: 1px; right: 1px; width: 16px; height: 16px; line-height: 15px;
   text-align: center; border-radius: 50%; background: rgba(0,0,0,.7); color: var(--fg);
   font-size: 12px; cursor: pointer;
 }
-.attach-thumb .x:hover { color: var(--err); }
+.attach-thumb .x:hover, .attach-file .x:hover { color: var(--err); }
+.attach-file {
+  position: relative; min-width: 96px; max-width: 180px; height: 56px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-panel);
+  display: flex; flex-direction: column; justify-content: center; padding: 6px 22px 6px 10px;
+}
+.attach-file-name {
+  font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.attach-file-meta { font-size: 11px; color: var(--fg-dim); }
+.file-chip, .msg-files .file-chip {
+  display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 4px 10px; margin: 0 6px 6px 0; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--bg-panel); color: var(--fg);
+  text-decoration: none; font-size: 12px;
+}
+a.file-chip:hover { border-color: var(--gold-dim); color: var(--gold); }
+.msg-files { display: flex; flex-wrap: wrap; margin-bottom: 8px; }
 #btn-attach {
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--bg-panel); color: var(--fg-dim); cursor: pointer; line-height: 0;
@@ -397,6 +414,11 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
   word-break: break-all; margin-top: 8px;
 }
 .side-head-btns { display: flex; gap: 10px; }
+#peer-sel {
+  max-width: 92px; margin-left: auto; margin-right: 8px;
+  background: var(--bg-panel); color: var(--gold); border: 1px solid var(--border);
+  border-radius: 6px; font-size: 11px; padding: 2px 4px; cursor: pointer;
+}
 
 @media (max-width: 860px) {
   #mobile-bar {
@@ -450,3 +472,98 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #35302a; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 会话图谱 ---------- */
+#graph-head {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--bg-side);
+}
+.gh-title { font-family: Georgia, "Songti SC", serif; color: var(--gold); font-size: 16px; }
+.gh-toggle { font-size: 12px; color: var(--fg-dim); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.gh-toggle input { accent-color: var(--gold); }
+#graph-filter {
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg); padding: 4px 9px; font-size: 12px; outline: none; width: 140px;
+}
+#graph-filter:focus { border-color: var(--gold-dim); }
+.gh-stat { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); margin-left: auto; }
+#graph-head button { background: none; border: none; color: var(--fg-dim); font-size: 15px; cursor: pointer; }
+#graph-head button:hover { color: var(--gold); }
+
+#graph-stage { flex: 1; position: relative; overflow: hidden; background:
+  radial-gradient(ellipse at 50% 40%, #1c1916 0%, var(--bg) 70%); }
+#graph-svg { width: 100%; height: 100%; display: block; }
+
+.gnode { cursor: pointer; }
+.gnode .body { stroke: rgba(0,0,0,.35); stroke-width: 1; transition: opacity .2s; }
+.gnode.dim { opacity: .16; }
+.gnode.sel .body { stroke: var(--gold); stroke-width: 2; }
+.gnode:hover .body { stroke: var(--fg); stroke-width: 1.6; }
+.gnode.cold .body { opacity: .55; }
+.nlabel { fill: var(--fg-dim); font-size: 9.5px; pointer-events: none; }
+.gnode.sel .nlabel, .gnode:hover .nlabel { fill: var(--fg); }
+.cluster-label {
+  fill: var(--gold-dim); font-size: 12px; opacity: .42; pointer-events: none;
+  font-family: Georgia, "Songti SC", serif; letter-spacing: .06em;
+}
+
+.ring-run { fill: none; stroke: #39ff88; stroke-width: 2; opacity: .9;
+  animation: gring 1.5s ease-in-out infinite; }
+@keyframes gring { 0%,100% { opacity: .95; stroke-width: 2; } 50% { opacity: .35; stroke-width: 3.4; } }
+.ring-goal { fill: none; stroke: var(--gold); stroke-width: 1.8; stroke-dasharray: 5 4; opacity: .9;
+  animation: gspin 9s linear infinite; transform-origin: center; }
+.ring-loop { fill: none; stroke: #6db3ff; stroke-width: 1.8; stroke-dasharray: 2 5; opacity: .9;
+  animation: gspin 4s linear infinite reverse; transform-origin: center; }
+@keyframes gspin { to { transform: rotate(360deg); } }
+.ring-err { fill: none; stroke: var(--err); stroke-width: 1.8; opacity: .85; }
+.ring-open { fill: none; stroke: #39ff88; stroke-width: 1.2; opacity: .4; stroke-dasharray: 3 3; }
+
+#graph-card {
+  position: absolute; width: 292px; z-index: 5;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 11px 13px; box-shadow: 0 8px 30px rgba(0,0,0,.55); font-size: 12.5px;
+}
+.gc-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.gc-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.gc-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-engine { font-family: var(--mono); font-size: 9px; padding: 1px 4px; border-radius: 3px;
+  border: 1px solid var(--border); color: var(--fg-dim); margin-left: auto; }
+.gc-meta, .gc-cwd { font-family: var(--mono); font-size: 10.5px; color: var(--fg-dim); }
+.gc-cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+.gc-live { color: #39ff88; font-family: var(--mono); font-size: 11.5px; margin: 5px 0; }
+.gc-tag { font-size: 11.5px; margin: 3px 0; font-family: var(--mono); }
+.gc-tag.goal { color: var(--gold); } .gc-tag.loop { color: #6db3ff; } .gc-tag.err { color: var(--err); }
+.gc-quote {
+  margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--border);
+  color: var(--fg-dim); max-height: 62px; overflow: hidden; line-height: 1.5;
+}
+.gc-quote.assistant { border-left-color: var(--gold-dim); color: var(--fg); }
+.gc-actions { display: flex; gap: 6px; margin-top: 9px; }
+.gc-actions button {
+  flex: 1; padding: 5px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  background: var(--gold); color: #1a1610; border: 1px solid var(--gold-dim); font-weight: 600;
+}
+.gc-actions .gc-close { background: none; color: var(--fg-dim); border-color: var(--border); font-weight: 400; }
+
+#graph-legend {
+  position: absolute; left: 14px; bottom: 12px; display: flex; gap: 13px; flex-wrap: wrap;
+  font-size: 11px; color: var(--fg-dim); background: rgba(23,21,18,.82);
+  padding: 7px 11px; border-radius: 8px; border: 1px solid var(--border); pointer-events: none;
+}
+#graph-legend div { display: flex; align-items: center; gap: 5px; }
+#graph-legend .lg { width: 10px; height: 10px; border-radius: 50%; border: 2px solid; display: inline-block; }
+#graph-legend .lg.ring-run { border-color: #39ff88; animation: none; }
+#graph-legend .lg.ring-goal { border-color: var(--gold); border-style: dashed; animation: none; }
+#graph-legend .lg.ring-loop { border-color: #6db3ff; border-style: dotted; animation: none; }
+#graph-legend .lg.ring-err { border-color: var(--err); }
+#graph-legend .lg.ring-open { border-color: rgba(57,255,136,.45); border-style: dashed; }
+#graph-legend .lg-note { color: #6f6857; }
+
+@media (max-width: 860px) {
+  #graph-head { padding: 8px 12px; gap: 9px; }
+  .gh-title { display: none; }
+  #graph-filter { width: 92px; }
+  #graph-card { width: min(280px, 88vw); }
+  #graph-legend { display: none; }
+}
+.nactivity { fill: #39ff88; font-size: 9px; font-family: var(--mono); pointer-events: none; opacity: .9; }

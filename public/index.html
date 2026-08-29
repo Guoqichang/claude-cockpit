@@ -17,12 +17,14 @@
   <div id="mobile-bar">
     <button id="btn-drawer" aria-label="会话列表">☰</button>
     <span id="mobile-title">Claude Cockpit</span>
+    <button id="btn-graph" title="会话图谱">◍</button>
     <button id="btn-running" title="运行中">◉</button>
   </div>
   <div id="drawer-backdrop"></div>
   <aside id="sidebar">
     <div class="side-head">
       <span class="brand">Claude Cockpit</span>
+      <select id="peer-sel" title="会话所在机器" hidden></select>
       <span class="side-head-btns">
         <button id="btn-phone" title="手机访问">▤</button>
         <button id="btn-refresh" title="刷新会话列表">⟳</button>
@@ -34,6 +36,9 @@
       <button id="btn-new-term">本地终端</button>
       <button id="btn-new-ssh">SSH</button>
     </div>
+    <div class="side-actions">
+      <button id="btn-open-graph">◍ 会话图谱</button>
+    </div>
     <input id="filter" type="text" placeholder="筛选会话…">
     <div id="term-list" class="side-section"></div>
     <div id="session-list" class="side-section grow"></div>
@@ -44,6 +49,22 @@
       <div class="welcome-inner">
         <h1>Claude Cockpit</h1>
         <p>左侧选择一个 Claude Code 或 Cursor Agent 会话继续对话；<br>或打开本地终端 / SSH 远程终端。</p>
+      </div>
+    </div>
+
+    <div id="graph-view" class="view" hidden>
+      <header id="graph-head">
+        <div class="gh-title">会话图谱</div>
+        <label class="gh-toggle"><input type="checkbox" id="graph-attention"> 注意力优先</label>
+        <label class="gh-toggle"><input type="checkbox" id="graph-clusters" checked> 聚类分组</label>
+        <input id="graph-filter" type="text" placeholder="筛选…">
+        <span class="gh-stat" id="graph-stat"></span>
+        <button id="graph-refresh" title="刷新">⟳</button>
+      </header>
+      <div id="graph-stage">
+        <svg id="graph-svg"></svg>
+        <div id="graph-card" hidden></div>
+        <div id="graph-legend"></div>
       </div>
     </div>
 
@@ -107,10 +128,10 @@
         <div class="composer-side">
           <button id="btn-send">发送</button>
           <button id="btn-stop" hidden>停止</button>
-          <button id="btn-attach" title="添加图片">
+          <button id="btn-attach" title="添加附件">
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10.6 3.2a2.4 2.4 0 0 1 3.4 3.4l-6.3 6.3a3.8 3.8 0 0 1-5.4-5.4l6-6a1 1 0 0 1 1.4 1.4l-6 6a1.8 1.8 0 0 0 2.6 2.6l6.3-6.3a.4.4 0 0 0-.6-.6l-5.6 5.6a1 1 0 1 1-1.4-1.4l5.6-5.6z" fill="currentColor"/></svg>
           </button>
-          <input id="file-input" type="file" accept="image/*" multiple hidden>
+          <input id="file-input" type="file" multiple hidden>
         </div>
       </div>
     </div>
@@ -176,5 +197,6 @@
 <script src="/vendor/xterm/lib/xterm.js"></script>
 <script src="/vendor/xterm-fit/lib/addon-fit.js"></script>
 <script src="/app.js"></script>
+<script src="/graph.js"></script>
 </body>
 </html>

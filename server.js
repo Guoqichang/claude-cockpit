@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import { listProjects, readSession, findSessionMeta } from './lib/session-router.js';
 import { allNames, setName } from './lib/names.js';
+import { buildGraph } from './lib/graph.js';
 import { startChat, subscribe, stopChat, hasChat, listChats, restoreChats, onChatDone } from './lib/chat.js';
 import { listCommands } from './lib/commands.js';
 import { getActive } from './lib/active.js';
@@ -16,10 +17,13 @@ import QRCode from 'qrcode';
 import { getKeys, addSub, removeSub, subCount, notify } from './lib/push.js';
 import { listProviders } from './lib/providers.js';
 import { holdAwake, releaseAwake, status as awakeStatus } from './lib/awake.js';
+import { isIndexedFilePath } from './lib/cursor-uploads.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 7799);
 const AUTH_PORT = Number(process.env.AUTH_PORT || 7788);
+const BIND = process.env.COCKPIT_BIND || '127.0.0.1';
+const AUTH_ONLY = process.env.COCKPIT_AUTH_ONLY === '1';
 const HOSTS_FILE = path.join(os.homedir(), '.claude-cockpit', 'hosts.json');
 const CONFIG_FILE = path.join(os.homedir(), '.claude-cockpit', 'config.json');
 
@@ -36,7 +40,7 @@ app.use(express.json({ limit: '60mb' }));   // images ride in chat.start payload
 
 // Requests arriving on AUTH_PORT come from the public tunnel and must carry the
 // token; PORT is the local-desktop listener and stays frictionless.
-const needsAuth = (req) => req.socket.localPort === AUTH_PORT;
+const needsAuth = (req) => AUTH_ONLY || req.socket.localPort === AUTH_PORT;
 
 app.use((req, res, next) => {
   if (!needsAuth(req)) return next();
@@ -48,7 +52,8 @@ app.use((req, res, next) => {
     noteSuccess(key);
     // a ?t= link (the QR) upgrades to a cookie so later requests are clean
     if (url.searchParams.get('t')) {
-      res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(getToken())}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax; Secure`);
+      const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+      res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(getToken())}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
       if (req.method === 'GET' && !req.path.startsWith('/api/')) { res.redirect(req.path); return; }
     }
     return next();
@@ -69,6 +74,14 @@ app.use('/vendor/dompurify', express.static(nm('dompurify')));
 app.use('/vendor/katex', express.static(nm('katex/dist')));
 app.use('/vendor/mermaid', express.static(nm('mermaid/dist')));
 
+app.get('/api/peers', (req, res) => {
+  const peers = readConfig().peers || [];
+  res.json(peers.map((p) => ({
+    id: p.id, label: p.label || p.id, url: p.url || '',
+    token: needsAuth(req) ? undefined : p.token,
+  })));
+});
+
 app.get('/api/projects', (req, res) => {
   try { res.json(listProjects()); }
   catch (e) { res.status(500).json({ error: String(e) }); }
@@ -81,6 +94,17 @@ app.get('/api/session/:slug/:id', (req, res) => {
     res.json(readSession(req.params.slug, req.params.id, { end, limit: limit || 200 }));
   }
   catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Cursor index-mode files: only paths under cockpit uploads or Cursor project assets
+app.get('/api/local-file', (req, res) => {
+  const raw = req.query.path;
+  const fp = Array.isArray(raw) ? raw[0] : raw;
+  if (!isIndexedFilePath(fp)) { res.status(403).json({ error: 'forbidden' }); return; }
+  const real = fs.realpathSync(fp);
+  res.sendFile(real, { headers: { 'Cache-Control': 'private, max-age=86400' } }, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
 });
 
 // the APK embeds the access token, so it is only downloadable through the
@@ -159,6 +183,11 @@ app.get('/api/commands', (req, res) => {
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+app.get('/api/graph', async (req, res) => {
+  try { res.json(await buildGraph()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 // custom session titles (empty name = revert to the auto title)
 app.get('/api/names', (req, res) => {
   try { res.json(allNames()); }
@@ -204,7 +233,7 @@ app.post('/api/hosts', (req, res) => {
 
 const server = http.createServer(app);       // local desktop listener
 const authServer = http.createServer(app);   // tunnel-facing listener (token required)
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 120 * 1024 * 1024 });
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -229,10 +258,16 @@ function publicWsOrigins() {
 
 function originAllowed(req, mode) {
   const origin = headerOrigin(req);
-  if (!origin) return false;
+  if (!origin) return true;
   if (mode === 'local') return localWsOrigins().has(origin);
-  if (mode === 'public') return publicWsOrigins().has(origin);
-  return false;
+  try {
+    const u = new URL(origin);
+    const host = String(req.headers.host || '').split(':')[0];
+    if (u.hostname === host) return true;
+    if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') return true;
+    if (/^100\.\d+\.\d+\.\d+$/.test(u.hostname)) return true;
+  } catch { /* ignore */ }
+  return publicWsOrigins().has(origin);
 }
 
 function wireUpgrade(srv, { requireAuth, originMode }) {
@@ -259,7 +294,7 @@ function wireUpgrade(srv, { requireAuth, originMode }) {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 }
-wireUpgrade(server, { requireAuth: false, originMode: 'local' });
+if (!AUTH_ONLY) wireUpgrade(server, { requireAuth: false, originMode: 'local' });
 wireUpgrade(authServer, { requireAuth: true, originMode: 'public' });
 
 wss.on('connection', (ws, req) => {
@@ -377,13 +412,21 @@ onChatDone(async ({ sessionId, code, result, startedAt, cwd }) => {
 // SIGHUP (terminal closed) must not take the service down with it
 process.on('SIGHUP', () => log('SIGHUP ignored — service stays up'));
 
-// both listeners bind localhost; remote access arrives through the reverse SSH
-// tunnel pointed at AUTH_PORT, which always demands the token
-server.listen(PORT, '127.0.0.1', () => {
-  const n = restoreChats();
-  console.log(`claude-cockpit: http://127.0.0.1:${PORT}${n ? ` (恢复 ${n} 个运行中的轮次)` : ''}`);
-});
-authServer.listen(AUTH_PORT, '127.0.0.1', () => {
-  getToken();   // materialize auth.json on first boot
-  console.log(`claude-cockpit auth listener: 127.0.0.1:${AUTH_PORT} (需要令牌)`);
-});
+// Local desktop: 127.0.0.1:PORT, no token. Tailscale/tunnel: AUTH_PORT (or
+// AUTH_ONLY on PORT) always demands the token.
+if (!AUTH_ONLY) {
+  server.listen(PORT, '127.0.0.1', () => {
+    const n = restoreChats();
+    console.log(`claude-cockpit: http://127.0.0.1:${PORT}${n ? ` (恢复 ${n} 个运行中的轮次)` : ''}`);
+  });
+  authServer.listen(AUTH_PORT, '127.0.0.1', () => {
+    getToken();
+    console.log(`claude-cockpit auth listener: 127.0.0.1:${AUTH_PORT} (需要令牌)`);
+  });
+} else {
+  authServer.listen(PORT, BIND, () => {
+    getToken();
+    const n = restoreChats();
+    console.log(`claude-cockpit: ${BIND}:${PORT} (AUTH_ONLY${n ? `, 恢复 ${n} 个运行中的轮次` : ''})`);
+  });
+}

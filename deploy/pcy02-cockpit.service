@@ -1,0 +1,20 @@
+[Unit]
+Description=Claude Cockpit (pcy-02)
+After=network.target
+
+[Service]
+Type=simple
+User=looper
+WorkingDirectory=/home/looper/claude-cockpit
+Environment=PATH=/home/looper/.local/bin:/home/looper/.hermes/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PORT=7799
+Environment=COCKPIT_BIND=0.0.0.0
+Environment=COCKPIT_AUTH_ONLY=1
+Environment=HOME=/home/looper
+ExecStart=/usr/bin/node /home/looper/claude-cockpit/server.js
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

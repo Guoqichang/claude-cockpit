@@ -192,6 +192,7 @@ function explainError(text) {
 function renderBlocks(container, role, blocks, toolMap) {
   let userTexts = [];
   let userImages = [];
+  let userFiles = [];
   for (const b of blocks) {
     if (b.type === 'image') {
       const src = b.url || `data:${b.mediaType || 'image/png'};base64,${b.data}`;
@@ -203,6 +204,11 @@ function renderBlocks(container, role, blocks, toolMap) {
       img.addEventListener('click', () => window.open(src, '_blank', 'width=1000,height=800'));
       wrap.appendChild(img);
       container.appendChild(wrap);
+      continue;
+    }
+    if (b.type === 'file') {
+      if (role === 'user') { userFiles.push(b); continue; }
+      container.appendChild(fileChip(b));
       continue;
     }
     if (b.type === 'text') {
@@ -270,7 +276,7 @@ function renderBlocks(container, role, blocks, toolMap) {
       }
     }
   }
-  if (userTexts.length || userImages.length) {
+  if (userTexts.length || userImages.length || userFiles.length) {
     const wrap = document.createElement('div');
     wrap.className = 'msg msg-user';
     wrap.innerHTML = '<div class="msg-role">你</div>';
@@ -283,6 +289,12 @@ function renderBlocks(container, role, blocks, toolMap) {
         img.addEventListener('click', () => window.open(src, '_blank', 'width=1000,height=800'));
         strip.appendChild(img);
       }
+      wrap.appendChild(strip);
+    }
+    if (userFiles.length) {
+      const strip = document.createElement('div');
+      strip.className = 'msg-files';
+      for (const f of userFiles) strip.appendChild(fileChip(f));
       wrap.appendChild(strip);
     }
     if (userTexts.length) {
@@ -299,12 +311,42 @@ function renderBlocks(container, role, blocks, toolMap) {
   }
 }
 
+function expandIndexedText(text) {
+  const src = String(text || '');
+  const images = [];
+  const files = [];
+  const take = (block, dest) => {
+    if (!block) return;
+    for (const m of block.matchAll(/^\s*\d+\.\s+(\S.+)$/gm)) dest.push(m[1].trim());
+  };
+  take(src.match(/<image_files>([\s\S]*?)<\/image_files>/)?.[1], images);
+  take(src.match(/<files>([\s\S]*?)<\/files>/)?.[1], files);
+  const cleaned = src
+    .replace(/\[Image\]\s*/g, '')
+    .replace(/<image_files>[\s\S]*?<\/image_files>\s*/g, '')
+    .replace(/<files>[\s\S]*?<\/files>\s*/g, '')
+    .replace(/^请查看附件。\s*/, '')
+    .replace(/^（见附图）\s*/, '')
+    .trim();
+  const extra = [];
+  for (const fp of images) extra.push({ type: 'image', url: '/api/local-file?path=' + encodeURIComponent(fp) });
+  for (const fp of files) extra.push({ type: 'file', name: fp.split(/[/\\]/).pop(), url: '/api/local-file?path=' + encodeURIComponent(fp) });
+  if (cleaned) extra.push({ type: 'text', text: cleaned });
+  return { extra, hadIndex: images.length + files.length > 0 };
+}
+
 // Normalize raw Anthropic message content (from stream-json events) → block list
 function normalizeStreamContent(content) {
   const blocks = [];
-  if (typeof content === 'string') { if (content.trim()) blocks.push({ type: 'text', text: content }); return blocks; }
+  const pushText = (t) => {
+    if (!t) return;
+    const { extra, hadIndex } = expandIndexedText(t);
+    if (hadIndex) blocks.push(...extra);
+    else if (t.trim()) blocks.push({ type: 'text', text: t });
+  };
+  if (typeof content === 'string') { pushText(content); return blocks; }
   for (const b of content || []) {
-    if (b.type === 'text' && b.text) blocks.push({ type: 'text', text: b.text });
+    if (b.type === 'text' && b.text) pushText(b.text);
     else if (b.type === 'image' && b.source?.type === 'base64') blocks.push({ type: 'image', mediaType: b.source.media_type, data: b.source.data });
     else if (b.type === 'thinking' && b.thinking?.trim()) blocks.push({ type: 'thinking', text: b.thinking });
     else if (b.type === 'tool_use') blocks.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input });
@@ -362,8 +404,12 @@ function updateComposer(v) {
   $('#btn-stop').hidden = !v.running;
   $('#input').placeholder = v.running
     ? '当前轮运行中——输入后 Enter 排队，本轮结束自动发送'
-    : (isCursor ? '输入消息发给 Cursor Agent，Enter 发送' : '输入消息，Enter 发送，Shift+Enter 换行');
-  $('#btn-attach').hidden = isCursor;
+    : (isCursor
+      ? '输入发给 Cursor Agent，Enter 发送 · 可粘贴/拖入图片和文件'
+      : '输入消息，Enter 发送，Shift+Enter 换行');
+  $('#btn-attach').hidden = false;
+  $('#btn-attach').title = isCursor ? '添加图片或文件（落盘后按路径发给 Agent）' : '添加图片';
+  $('#file-input').accept = isCursor ? '' : 'image/*';
   $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor);
 }
 
@@ -380,14 +426,9 @@ function enqueue(v, text, atts = [], model = null) {
   head.append(label, x);
   const body = document.createElement('div');
   body.className = 'queued-body';
-  body.textContent = text || (atts.length ? `（${atts.length} 张图片）` : '');
+  body.textContent = text || (atts.length ? `（${atts.length} 个附件）` : '');
   div.append(head, body);
-  if (atts.length) {
-    const strip = document.createElement('div');
-    strip.className = 'msg-images';
-    for (const a of atts) { const img = document.createElement('img'); img.src = a.url; strip.appendChild(img); }
-    div.appendChild(strip);
-  }
+  if (atts.length) div.appendChild(attachPreviewStrip(atts));
   v.el.appendChild(div);
   const item = { text, atts, el: div };
   x.addEventListener('click', () => {
@@ -420,6 +461,7 @@ function failRunningChat(v, reason) {
   v.el.appendChild(err);
   if (v.ch) wsHandlers.delete(v.ch);
   v.running = false; v.ch = null; v.stopRequested = false;
+  releaseLocalTurn(v);
   if (currentChatKey === v.key) updateComposer(v);
   restoreQueueToInput(v);
 }
@@ -495,8 +537,34 @@ async function openSession(slug, id) {
 
 // Another device (phone ↔ desktop) may have appended to this session's file.
 // Pull just the new messages instead of re-rendering the whole conversation.
+function lastUserBubbleText(el) {
+  const nodes = el.querySelectorAll('.msg-user .bubble');
+  return nodes.length ? (nodes[nodes.length - 1].textContent || '').trim() : '';
+}
+
+function armLocalTurn(v) {
+  v.localTurn = true;
+  clearTimeout(v.localTurnTimer);
+  // if the session file is slow to land, still allow other-device sync later
+  v.localTurnTimer = setTimeout(() => { v.localTurn = false; }, 8000);
+}
+
+function releaseLocalTurn(v) {
+  v.localTurn = false;
+  clearTimeout(v.localTurnTimer);
+}
+
+function refreshWatermark(v) {
+  const id = v.id0 || v.id;
+  if (!v.slug || !id) return;
+  fetch(`/api/session/${encodeURIComponent(v.slug)}/${encodeURIComponent(id)}?limit=1`)
+    .then(r => r.json()).then(d => { if (typeof d.total === 'number') v.total = d.total; })
+    .catch(() => { /* not persisted yet */ })
+    .finally(() => releaseLocalTurn(v));
+}
+
 async function syncSession(v) {
-  if (!v.slug || !v.id0 || v.running || v.syncing) return;
+  if (!v.slug || !v.id0 || v.running || v.syncing || v.localTurn) return;
   v.syncing = true;
   try {
     const res = await fetch(`/api/session/${encodeURIComponent(v.slug)}/${encodeURIComponent(v.id0)}?limit=60`);
@@ -506,7 +574,12 @@ async function syncSession(v) {
     if (data.total <= v.total) return;
 
     const added = data.total - v.total;
-    const fresh = data.messages.slice(Math.max(0, data.messages.length - added));
+    let fresh = data.messages.slice(Math.max(0, data.messages.length - added));
+    // dispatch() already painted the local user bubble; a stale watermark
+    // would replay it as a second 「你」. Drop a leading duplicate.
+    const lastUser = lastUserBubbleText(v.el);
+    const firstUser = (fresh[0]?.blocks || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (fresh[0]?.role === 'user' && lastUser && firstUser === lastUser) fresh = fresh.slice(1);
     if (!fresh.length) { v.total = data.total; return; }
     const atBottom = messagesRoot.scrollHeight - messagesRoot.scrollTop - messagesRoot.clientHeight < 80;
     v.el.appendChild(renderPage(v, fresh));
@@ -633,10 +706,49 @@ function clearLiveBody(v) {
   st.kind = null; st.text = '';
 }
 
-// ---------------- image attachments ----------------
+// ---------------- attachments ----------------
 const MAX_EDGE = 1568;          // Claude downsizes above this anyway; save the tokens
-const MAX_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_CURSOR_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_ATTS = 8;
 let pendingAttachments = [];
+
+function currentEngine() {
+  return chatViews.get(currentChatKey)?.engine || 'claude';
+}
+
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function fileChip(f) {
+  const a = document.createElement(f.url ? 'a' : 'span');
+  a.className = 'file-chip';
+  a.textContent = f.name || '文件';
+  if (f.url) {
+    a.href = f.url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+  }
+  return a;
+}
+
+function attachPreviewStrip(atts) {
+  const strip = document.createElement('div');
+  strip.className = 'msg-images';
+  for (const a of atts) {
+    if (a.kind === 'image' && a.url) {
+      const img = document.createElement('img');
+      img.src = a.url;
+      strip.appendChild(img);
+    } else {
+      strip.appendChild(fileChip({ name: a.name, url: a.url }));
+    }
+  }
+  return strip;
+}
 
 function readAsDataURL(file) {
   return new Promise((resolve, reject) => {
@@ -667,13 +779,36 @@ function shrink(dataUrl, mediaType) {
 }
 
 async function addAttachment(file) {
-  if (!file.type.startsWith('image/')) return;
-  if (pendingAttachments.length >= 8) { alert('单条消息最多 8 张图片'); return; }
-  let { dataUrl, mediaType } = await shrink(await readAsDataURL(file), file.type);
-  const data = dataUrl.split(',')[1] || '';
-  if (data.length * 0.75 > MAX_BYTES) { alert(`图片过大（>${MAX_BYTES / 1024 / 1024}MB），已跳过`); return; }
-  pendingAttachments.push({ id: 'a' + Math.random().toString(36).slice(2, 8), mediaType, data, url: dataUrl });
+  if (!file || looksLikeDir(file)) return;
+  const engine = currentEngine();
+  const isImage = (file.type || '').startsWith('image/')
+    || /\.(png|jpe?g|gif|webp|bmp|heic|heif|svg)$/i.test(file.name || '');
+  if (engine !== 'cursor' && !isImage) return;
+  if (pendingAttachments.length >= MAX_ATTS) { alert(`单条消息最多 ${MAX_ATTS} 个附件`); return; }
+
+  let dataUrl = await readAsDataURL(file);
+  let mediaType = file.type || (isImage ? 'image/png' : 'application/octet-stream');
+  if (engine !== 'cursor' && isImage) {
+    ({ dataUrl, mediaType } = await shrink(dataUrl, mediaType));
+  }
+  const data = String(dataUrl).split(',')[1] || '';
+  const bytes = data.length * 0.75;
+  const cap = engine === 'cursor' ? MAX_CURSOR_FILE_BYTES : MAX_IMAGE_BYTES;
+  if (bytes > cap) {
+    alert(`${file.name || '附件'}过大（>${Math.round(cap / 1024 / 1024)}MB），已跳过`);
+    return;
+  }
+  pendingAttachments.push({
+    id: 'a' + Math.random().toString(36).slice(2, 8),
+    name: file.name || (isImage ? 'image.png' : 'file'),
+    mediaType, data, url: isImage ? dataUrl : null,
+    kind: isImage ? 'image' : 'file', size: file.size,
+  });
   renderAttachStrip();
+}
+
+function looksLikeDir(file) {
+  return file.size === 0 && !file.type && !/\.\w+$/.test(file.name || '');
 }
 
 function renderAttachStrip() {
@@ -682,9 +817,20 @@ function renderAttachStrip() {
   strip.hidden = !pendingAttachments.length;
   for (const a of pendingAttachments) {
     const box = document.createElement('div');
-    box.className = 'attach-thumb';
-    const img = document.createElement('img');
-    img.src = a.url;
+    box.className = a.kind === 'image' ? 'attach-thumb' : 'attach-file';
+    if (a.kind === 'image') {
+      const img = document.createElement('img');
+      img.src = a.url;
+      box.appendChild(img);
+    } else {
+      const name = document.createElement('span');
+      name.className = 'attach-file-name';
+      name.textContent = a.name;
+      const meta = document.createElement('span');
+      meta.className = 'attach-file-meta';
+      meta.textContent = fmtSize(a.size || 0);
+      box.append(name, meta);
+    }
     const x = document.createElement('span');
     x.className = 'x';
     x.textContent = '×';
@@ -692,18 +838,28 @@ function renderAttachStrip() {
       pendingAttachments = pendingAttachments.filter(p => p.id !== a.id);
       renderAttachStrip();
     });
-    box.append(img, x);
+    box.appendChild(x);
     strip.appendChild(box);
   }
 }
 
+function clipboardFiles(e) {
+  const fromItems = [...(e.clipboardData?.items || [])]
+    .filter(i => i.kind === 'file')
+    .map(i => i.getAsFile())
+    .filter(Boolean);
+  if (fromItems.length) return fromItems;
+  return [...(e.clipboardData?.files || [])];
+}
+
 $('#input').addEventListener('paste', async (e) => {
-  const files = [...(e.clipboardData?.items || [])]
-    .filter(i => i.kind === 'file' && i.type.startsWith('image/'))
-    .map(i => i.getAsFile()).filter(Boolean);
+  const files = clipboardFiles(e);
   if (!files.length) return;
+  const engine = currentEngine();
+  const usable = engine === 'cursor' ? files : files.filter(f => (f.type || '').startsWith('image/'));
+  if (!usable.length) return;
   e.preventDefault();
-  for (const f of files) await addAttachment(f);
+  for (const f of usable) await addAttachment(f);
 });
 
 const composerEl = $('#composer');
@@ -748,13 +904,12 @@ function sendMessage() {
 }
 
 function dispatch(v, text, atts = [], oneShotModel = null) {
-  if (v.engine === 'cursor' && atts.length) {
-    alert('Cursor Agent 暂不支持 Cockpit 图片输入');
-    return;
-  }
-  const blocks = atts.map(a => ({ type: 'image', url: a.url }));
+  const blocks = atts.map(a => a.kind === 'file'
+    ? { type: 'file', name: a.name }
+    : { type: 'image', url: a.url, mediaType: a.mediaType, data: a.data });
   if (text) blocks.push({ type: 'text', text });
   renderBlocks(v.el, 'user', blocks, v.toolMap);
+  armLocalTurn(v);
   if (oneShotModel) {
     const tag = document.createElement('div');
     tag.className = 'model-tag';
@@ -762,12 +917,14 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
     v.el.appendChild(tag);
   }
   if (v.engine !== 'cursor') warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
-  // globally unique channel id: survives page refreshes and multiple tabs
   const ch = 'c' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+  const payloadAtts = v.engine === 'cursor'
+    ? atts.map(a => ({ name: a.name, mediaType: a.mediaType, data: a.data }))
+    : atts.filter(a => a.kind === 'image').map(a => ({ mediaType: a.mediaType, data: a.data }));
   attachChat(v, ch, {
     start: { cwd: v.cwd || undefined, resume: v.id || undefined, engine: v.engine || 'claude',
-             prompt: text || '（见附图）',
-             attachments: atts.map(a => ({ mediaType: a.mediaType, data: a.data })),
+             prompt: text || '',
+             attachments: payloadAtts,
              permissionMode: $('#perm-mode').value,
              ...resolveModelChoice(oneShotModel || $('#model-sel').value, v.engine) },
   });
@@ -818,12 +975,20 @@ function attachChat(v, ch, { start, fresh } = {}) {
         handleStreamEvent(v, spinner, { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: e.text } });
       } else if (e.type === 'stream_event') {
         handleStreamEvent(v, spinner, e.event);
-      } else if (e.type === 'assistant' || e.type === 'user') {
-        // authoritative version arrived — drop the preview and render properly
-        clearLiveBody(v);
-        if (e.type === 'user') { liveState(v).tool = null; }   // tool_result came back
+      } else if (e.type === 'user') {
+        liveState(v).tool = null;
         const blocks = normalizeStreamContent(e.message?.content);
-        v.el.insertBefore(blockGroup(v, e.type, blocks), spinner);
+        const hasToolBits = blocks.some(b => b.type === 'tool_result' || b.type === 'tool_use');
+        // Cursor echoes the full prompt (including <image_files> index). dispatch()
+        // already drew the user bubble; skip the dump unless this is a tool result.
+        if (hasToolBits) {
+          clearLiveBody(v);
+          v.el.insertBefore(blockGroup(v, 'user', blocks), spinner);
+        }
+      } else if (e.type === 'assistant') {
+        clearLiveBody(v);
+        const blocks = normalizeStreamContent(e.message?.content);
+        v.el.insertBefore(blockGroup(v, 'assistant', blocks), spinner);
       } else if (e.type === 'result') {
         if (e.session_id) {
           v.id = e.session_id;
@@ -893,13 +1058,10 @@ function attachChat(v, ch, { start, fresh } = {}) {
       wsHandlers.delete(ch);
       if (currentChatKey === v.key) updateComposer(v);
       loadProjects();
-      // the turn we just streamed is now in the file; keep the watermark aligned
-      // so cross-device sync does not replay it
-      if (v.slug && (v.id0 || v.id)) {
-        fetch(`/api/session/${encodeURIComponent(v.slug)}/${encodeURIComponent(v.id0 || v.id)}?limit=1`)
-          .then(r => r.json()).then(d => { if (typeof d.total === 'number') v.total = d.total; })
-          .catch(() => { /* not persisted yet */ });
-      }
+      // hold cross-device sync until the watermark catches up, otherwise the
+      // bubble dispatch() already drew is replayed from the session file
+      if (v.slug && (v.id0 || v.id)) refreshWatermark(v);
+      else releaseLocalTurn(v);
       if (stopped) restoreQueueToInput(v);
       else flushQueue(v);
     }
@@ -1419,6 +1581,7 @@ async function pollActive() {
             v.slug = p.slug;
             v.id0 = v.id;
             v.engine = p.engine || v.engine || 'claude';
+            if (v.localTurn) refreshWatermark(v);
             break;
           }
         }
@@ -1444,6 +1607,7 @@ function switchView(which) {
   $('#chat-view').hidden = which !== 'chat';
   $('#term-view').hidden = which !== 'term';
   $('#running-view').hidden = which !== 'running';
+  $('#graph-view').hidden = which !== 'graph';
   closeDrawer();
 }
 
@@ -1664,6 +1828,39 @@ window.addEventListener('resize', () => {
   if (activeTermCh) terms.get(activeTermCh)?.fit.fit();
 });
 
+// ---------------- host switcher (本机 ↔ pcy-02) ----------------
+function peerHost(url) {
+  try { return new URL(url, location.origin).host; } catch { return ''; }
+}
+async function initPeers() {
+  const sel = $('#peer-sel');
+  if (!sel) return;
+  let peers = [];
+  try { peers = await (await fetch('/api/peers')).json(); } catch { peers = []; }
+  if (!Array.isArray(peers) || peers.length < 2) return;
+  sel.hidden = false;
+  sel.innerHTML = '';
+  const here = location.host;
+  for (const p of peers) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.label || p.id;
+    opt.dataset.url = p.url || '';
+    if (p.token) opt.dataset.token = p.token;
+    if (peerHost(p.url || location.origin) === here) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener('change', () => {
+    const opt = sel.selectedOptions[0];
+    if (!opt) return;
+    const url = (opt.dataset.url || '').replace(/\/+$/, '');
+    if (!url || peerHost(url) === location.host) return;
+    const token = opt.dataset.token || '';
+    location.href = token ? `${url}/?t=${encodeURIComponent(token)}` : url + '/';
+  });
+}
+initPeers();
+
 $('#btn-new-term').addEventListener('click', () => {
   openTerminal('local', { cwd: chatViews.get(currentChatKey)?.cwd }, '本地终端');
 });
@@ -1792,3 +1989,7 @@ $('#ssh-dialog').addEventListener('close', () => {
   }
   openTerminal('ssh', { ssh: conn }, `${conn.username}@${conn.host}`);
 });
+
+// graph.js 是独立脚本，需要这两个入口
+window.openSession = openSession;
+window.switchView = switchView;
