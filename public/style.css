@@ -108,6 +108,7 @@ body {
 }
 .engine-badge.cursor { color: #7eb8ff; border-color: #3a5070; }
 .engine-badge.claude { color: var(--gold-dim); border-color: #5a4a28; }
+.engine-badge.hermes { color: #c9a0ff; border-color: #5a4070; }
 .live-dot {
   display: none; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 6px; vertical-align: 1px; flex: 0 0 auto;

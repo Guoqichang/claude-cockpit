@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Cockpit 反向隧道：quant:9080 → 本机 7788（强制令牌的监听口）
+# Cockpit 反向隧道：中转机:$RPORT → 本机 7788（强制令牌的监听口）
 #
-# 由 ~/Library/LaunchAgents/com.looperhome.cockpit-tunnel.plist 拉起，退出即重启。
+# 需要环境变量：
+#   COCKPIT_RELAY_HOST   例如 root@relay.example.com
+# 可选：
+#   COCKPIT_RELAY_PORT   默认 9080
+#   COCKPIT_AUTH_PORT    默认 7788
+#
+# 由 LaunchAgent 拉起，退出即重启。
 #
 # 为什么不是直接 exec ssh：服务端 sshd 默认没开 ClientAlive，网络突然断开时
-# 旧会话会变僵尸并一直占着 9080，新隧道 bind 失败 → ExitOnForwardFailure 退出
+# 旧会话会变僵尸并一直占着转发端口，新隧道 bind 失败 → ExitOnForwardFailure 退出
 # → launchd 重拉 → 死循环。所以每次连之前先清掉占用者。
 set -uo pipefail
-HOST="root@38.76.164.215"
-RPORT=9080
-LPORT=7788
+HOST="${COCKPIT_RELAY_HOST:?请设置 COCKPIT_RELAY_HOST，例如 root@relay.example.com}"
+RPORT="${COCKPIT_RELAY_PORT:-9080}"
+LPORT="${COCKPIT_AUTH_PORT:-7788}"
 SSH_OPTS=(-o BatchMode=yes -o ControlPath=none -o IPQoS=none
           -o ExitOnForwardFailure=yes -o ServerAliveInterval=30
           -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new

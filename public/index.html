@@ -33,6 +33,7 @@
     <div class="side-actions">
       <button id="btn-new-chat">＋ Claude</button>
       <button id="btn-new-cursor">＋ Cursor</button>
+      <button id="btn-new-hermes">＋ Hermes</button>
       <button id="btn-new-term">本地终端</button>
       <button id="btn-new-ssh">SSH</button>
     </div>
@@ -48,7 +49,7 @@
     <div id="welcome" class="view">
       <div class="welcome-inner">
         <h1>Claude Cockpit</h1>
-        <p>左侧选择一个 Claude Code 或 Cursor Agent 会话继续对话；<br>或打开本地终端 / SSH 远程终端。</p>
+        <p>左侧选择一个 Claude Code、Cursor Agent 或 Hermes 会话继续对话；<br>或打开本地终端 / SSH 远程终端。</p>
       </div>
     </div>
 
@@ -101,6 +102,11 @@
                 <option value="claude-sonnet-5">Sonnet 5</option>
                 <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
                 <option value="claude-opus-4-8">Opus 4.8</option>
+              </optgroup>
+              <optgroup id="og-hermes" class="model-hermes" label="Hermes Agent" hidden>
+                <option value="DeepSeek-V4-Flash">DeepSeek V4 Flash</option>
+                <option value="DeepSeek-V4-Pro">DeepSeek V4 Pro</option>
+                <option value="GLM-5.1">GLM-5.1</option>
               </optgroup>
               <optgroup id="og-cursor" class="model-cursor" label="Cursor Agent" hidden>
                 <option value="composer-2.5">Composer 2.5</option>
@@ -155,7 +161,7 @@
   <form method="dialog" id="ssh-form">
     <h2>SSH 连接</h2>
     <div id="saved-hosts"></div>
-    <label>主机 <input name="host" required placeholder="38.76.164.104"></label>
+    <label>主机 <input name="host" required placeholder="192.168.1.10"></label>
     <div class="row">
       <label>端口 <input name="port" value="22" size="5"></label>
       <label>用户 <input name="username" required placeholder="ubuntu"></label>
@@ -172,7 +178,7 @@
 <dialog id="phone-dialog">
   <form method="dialog" id="phone-form">
     <h2>手机访问</h2>
-    <label>公网地址 <input name="base" placeholder="https://cockpit.verdictfinance.top"></label>
+    <label>公网地址 <input name="base" placeholder="https://cockpit.example.com"></label>
     <div class="row end"><button value="ok">生成二维码</button><button value="cancel" formnovalidate>关闭</button></div>
     <div id="phone-qr"></div>
   </form>
@@ -185,9 +191,10 @@
       <select name="engine">
         <option value="claude" selected>Claude Code</option>
         <option value="cursor">Cursor Agent</option>
+        <option value="hermes">Hermes Agent</option>
       </select>
     </label>
-    <label>工作目录 <input name="cwd" placeholder="/Users/looperhome"></label>
+    <label>工作目录 <input name="cwd" placeholder="/path/to/project"></label>
     <div class="row end">
       <button value="ok">创建</button>
       <button value="cancel" formnovalidate>取消</button>

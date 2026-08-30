@@ -27,8 +27,12 @@ echo "java     : $(java -version 2>&1 | head -1)"
 
 # 令牌与地址从本机配置注入，不写死在仓库里
 TOKEN="$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude-cockpit/auth.json')))['token'])" 2>/dev/null || echo '')"
-BASE="$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude-cockpit/config.json'))).get('publicUrl',''))" 2>/dev/null || echo '')"
-[ -n "$BASE" ] || BASE="https://cockpit.verdictfinance.top"
+BASE="${COCKPIT_PUBLIC_URL:-}"
+[ -n "$BASE" ] || BASE="$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude-cockpit/config.json'))).get('publicUrl',''))" 2>/dev/null || echo '')"
+if [ -z "$BASE" ]; then
+  echo "请在 ~/.claude-cockpit/config.json 里设置 publicUrl，或导出 COCKPIT_PUBLIC_URL" >&2
+  exit 1
+fi
 BASE="${BASE%/}/"
 echo "base url : $BASE"
 echo "token    : ${TOKEN:0:6}…（构建期注入）"

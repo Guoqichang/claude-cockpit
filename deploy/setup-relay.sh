@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# Claude Cockpit 手机中转 · 服务端一次性配置（在 quant 38.76.164.215 上执行）
+# Claude Cockpit 手机中转 · 服务端一次性配置
 #
-# 用法（在 Mac 上跑，输一次密码）：
-#   ssh root@38.76.164.215 'bash -s' < ~/projects/claude-cockpit/deploy/setup-relay.sh
+# 在中转机器上执行，或从本机推过去：
+#   COCKPIT_DOMAIN=cockpit.example.com \
+#   SSH_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" \
+#   ssh root@relay.example.com 'bash -s' < deploy/setup-relay.sh
 #
 # 干三件事，全部幂等、改前自动备份：
 #   1. 把本机公钥装进 authorized_keys
 #   2. 打开 sshd 的 PubkeyAuthentication（保留密码认证，不锁自己）
-#   3. Caddy 加一个站点 cockpit.verdictfinance.top → 127.0.0.1:9080（隧道出口）
+#   3. Caddy 加一个站点 $COCKPIT_DOMAIN → 127.0.0.1:9080（隧道出口）
 set -uo pipefail
 
-PUBKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIESxUfKjGlo4MEV8SREZm+4LwKe8Baji+zeqtkZpB+eL looperhome@macbook-air'
+COCKPIT_DOMAIN="${COCKPIT_DOMAIN:?请设置 COCKPIT_DOMAIN，例如 cockpit.example.com}"
+if [ -n "${SSH_PUBKEY:-}" ]; then
+  PUBKEY="$SSH_PUBKEY"
+elif [ -f "${HOME}/.ssh/id_ed25519.pub" ]; then
+  PUBKEY="$(cat "${HOME}/.ssh/id_ed25519.pub")"
+else
+  echo "请设置 SSH_PUBKEY，或准备好 ~/.ssh/id_ed25519.pub" >&2
+  exit 1
+fi
+CADDYFILE="${CADDYFILE:-/root/caddy/Caddyfile}"
+RELAY_PORT="${COCKPIT_RELAY_PORT:-9080}"
 
 echo "=== 1. 安装公钥 ==="
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
@@ -47,17 +59,21 @@ echo "--- 当前生效 ---"
 sshd -T 2>/dev/null | grep -E '^(pubkeyauthentication|passwordauthentication)'
 
 echo "=== 3. Caddy 站点 ==="
-CF=/root/caddy/Caddyfile
-if [ ! -f "$CF" ]; then echo "!! 找不到 $CF，跳过"; exit 1; fi
-cp "$CF" "/root/caddy/Caddyfile.bak.$(date +%s)"
-if grep -q 'cockpit.verdictfinance.top' "$CF"; then
+if [ ! -f "$CADDYFILE" ]; then echo "!! 找不到 $CADDYFILE，跳过"; exit 1; fi
+cp "$CADDYFILE" "${CADDYFILE}.bak.$(date +%s)"
+if grep -q "$COCKPIT_DOMAIN" "$CADDYFILE"; then
   echo "站点已存在，跳过"
 else
-  printf '\ncockpit.verdictfinance.top {\n\treverse_proxy 127.0.0.1:9080\n}\n' >> "$CF"
+  printf '\n%s {\n\treverse_proxy 127.0.0.1:%s\n}\n' "$COCKPIT_DOMAIN" "$RELAY_PORT" >> "$CADDYFILE"
   echo "站点已追加"
 fi
-/root/caddy/caddy validate --config "$CF" --adapter caddyfile 2>&1 | tail -3
-/root/caddy/caddy reload --config "$CF" --adapter caddyfile 2>&1 | tail -3
+if [ -x /root/caddy/caddy ]; then
+  /root/caddy/caddy validate --config "$CADDYFILE" --adapter caddyfile 2>&1 | tail -3
+  /root/caddy/caddy reload --config "$CADDYFILE" --adapter caddyfile 2>&1 | tail -3
+elif command -v caddy >/dev/null 2>&1; then
+  caddy validate --config "$CADDYFILE" --adapter caddyfile 2>&1 | tail -3
+  caddy reload --config "$CADDYFILE" --adapter caddyfile 2>&1 | tail -3
+fi
 
 echo "=== 完成 ==="
-tail -5 "$CF"
+tail -5 "$CADDYFILE"

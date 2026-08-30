@@ -2,6 +2,25 @@
   "name": "claude-cockpit",
   "version": "0.1.0",
   "description": "Local web cockpit for Claude Code: session browser, markdown chat, embedded terminal, SSH remote",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Guoqichang/claude-cockpit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Guoqichang/claude-cockpit/issues"
+  },
+  "homepage": "https://github.com/Guoqichang/claude-cockpit#readme",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "cockpit",
+    "terminal",
+    "ai"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "scripts": {
     "start": "node server.js",

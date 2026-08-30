@@ -8,7 +8,8 @@ import { WebSocketServer } from 'ws';
 import { listProjects, readSession, findSessionMeta } from './lib/session-router.js';
 import { allNames, setName } from './lib/names.js';
 import { buildGraph } from './lib/graph.js';
-import { startChat, subscribe, stopChat, hasChat, listChats, restoreChats, onChatDone } from './lib/chat.js';
+import { startChat, subscribe, stopChat, hasChat, listChats, restoreChats, onChatDone, waitForChat } from './lib/chat.js';
+import { hermesStatus } from './lib/hermes.js';
 import { listCommands } from './lib/commands.js';
 import { getActive } from './lib/active.js';
 import { openLocalTerm, openSshTerm } from './lib/term.js';
@@ -82,18 +83,85 @@ app.get('/api/peers', (req, res) => {
   })));
 });
 
-app.get('/api/projects', (req, res) => {
-  try { res.json(listProjects()); }
+app.get('/api/projects', async (req, res) => {
+  try { res.json(await listProjects()); }
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-app.get('/api/session/:slug/:id', (req, res) => {
+app.get('/api/session/:slug/:id', async (req, res) => {
   try {
     const end = req.query.end !== undefined ? parseInt(req.query.end, 10) : undefined;
     const limit = req.query.limit !== undefined ? parseInt(req.query.limit, 10) : undefined;
-    res.json(readSession(req.params.slug, req.params.id, { end, limit: limit || 200 }));
+    res.json(await readSession(req.params.slug, req.params.id, { end, limit: limit || 200 }));
   }
   catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/hermes/status', (req, res) => {
+  try { res.json(hermesStatus()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+function flattenSessions(projects) {
+  const out = [];
+  for (const p of projects) {
+    for (const s of p.sessions || []) {
+      out.push({
+        engine: s.engine || p.engine || 'claude',
+        slug: p.slug, id: s.id, title: s.title,
+        cwd: s.cwd || p.cwd || '', mtimeMs: s.mtimeMs, msgCount: s.msgCount ?? null,
+      });
+    }
+  }
+  return out.sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0));
+}
+
+// Open API for Hermes (and other agents): list / read / start a Cockpit turn.
+app.get('/api/open/sessions', async (req, res) => {
+  try {
+    const engine = String(req.query.engine || '').trim();
+    let rows = flattenSessions(await listProjects());
+    if (engine) rows = rows.filter((s) => s.engine === engine);
+    if (req.query.q) {
+      const q = String(req.query.q).toLowerCase();
+      rows = rows.filter((s) => (s.title || '').toLowerCase().includes(q) || (s.id || '').includes(q));
+    }
+    res.json(rows.slice(0, Math.min(200, Number(req.query.limit) || 80)));
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.get('/api/open/session/:slug/:id', async (req, res) => {
+  try {
+    const limit = req.query.limit !== undefined ? parseInt(req.query.limit, 10) : 80;
+    res.json(await readSession(req.params.slug, req.params.id, { limit: limit || 80 }));
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.get('/api/open/chats', (req, res) => {
+  try { res.json(listChats()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/open/chat', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const engine = b.engine === 'hermes' || b.engine === 'cursor' ? b.engine : 'claude';
+    const prompt = String(b.prompt || b.message || '').trim();
+    if (!prompt) { res.status(400).json({ error: 'prompt required' }); return; }
+    const ch = 'o' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+    startChat(ch, {
+      engine, cwd: b.cwd, resume: b.resume || b.sessionId,
+      prompt, model: b.model, permissionMode: b.permissionMode, provider: b.provider,
+    });
+    const wait = b.wait !== false;
+    if (!wait) { res.json({ ch, sessionId: b.resume || null, running: true }); return; }
+    const out = await waitForChat(ch, Math.min(10 * 60 * 1000, Number(b.timeoutMs) || 180000));
+    res.json({ ch, ...out });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.post('/api/open/chat/:ch/stop', (req, res) => {
+  res.json({ ok: stopChat(req.params.ch) });
 });
 
 // Cursor index-mode files: only paths under cockpit uploads or Cursor project assets
@@ -394,7 +462,7 @@ setInterval(() => {
 // finished turn → phone notification
 onChatDone(async ({ sessionId, code, result, startedAt, cwd }) => {
   try {
-    const meta = sessionId ? findSessionMeta(sessionId) : null;
+    const meta = sessionId ? await findSessionMeta(sessionId) : null;
     const title = meta?.title || '新会话';
     const secs = Math.max(0, Math.round((Date.now() - (startedAt || Date.now())) / 1000));
     const dur = secs < 60 ? `${secs}秒` : `${Math.floor(secs / 60)}分${String(secs % 60).padStart(2, '0')}秒`;

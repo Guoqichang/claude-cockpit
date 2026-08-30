@@ -400,7 +400,7 @@ function showChatView(key) {
   const v = chatViews.get(key);
   $('#chat-title').textContent = v.title || '新会话';
   $('#mobile-title').textContent = v.title || '新会话';
-  const eng = v.engine === 'cursor' ? 'Cursor' : 'Claude';
+  const eng = engineName(v.engine);
   $('#chat-sub').textContent = `${eng}${v.cwd ? '  ·  ' + v.cwd : ''}${v.id ? '  ·  ' + v.id : ''}`;
   switchView('chat');
   updateComposer(v);
@@ -409,18 +409,21 @@ function showChatView(key) {
 
 function updateComposer(v) {
   const isCursor = v?.engine === 'cursor';
+  const isHermes = v?.engine === 'hermes';
   syncModelSelector(v?.engine || 'claude');
   $('#btn-send').textContent = v.running ? '排队' : '发送';
   $('#btn-stop').hidden = !v.running;
   $('#input').placeholder = v.running
     ? '当前轮运行中——输入后 Enter 排队，本轮结束自动发送'
-    : (isCursor
-      ? '输入发给 Cursor Agent，Enter 发送 · 可粘贴/拖入图片和文件'
-      : '输入消息，Enter 发送，Shift+Enter 换行');
-  $('#btn-attach').hidden = false;
+    : isHermes
+      ? '输入发给 Hermes Agent，Enter 发送'
+      : (isCursor
+        ? '输入发给 Cursor Agent，Enter 发送 · 可粘贴/拖入图片和文件'
+        : '输入消息，Enter 发送，Shift+Enter 换行');
+  $('#btn-attach').hidden = isHermes;
   $('#btn-attach').title = isCursor ? '添加图片或文件（落盘后按路径发给 Agent）' : '添加图片';
   $('#file-input').accept = isCursor ? '' : 'image/*';
-  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor);
+  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor || isHermes);
 }
 
 function enqueue(v, text, atts = [], model = null) {
@@ -626,15 +629,21 @@ function newChat(cwd, engine = 'claude') {
   const key = 'new-' + (++chSeq);
   getOrCreateChatView(key, {
     slug: null, id: null, cwd: cwd || '', engine,
-    title: engine === 'cursor' ? '新 Cursor 会话' : '新 Claude 会话',
+    title: engine === 'cursor' ? '新 Cursor 会话' : engine === 'hermes' ? '新 Hermes 会话' : '新 Claude 会话',
   });
   showChatView(key);
   markActiveSession(null);
   $('#input').focus();
 }
 
+function engineName(engine) {
+  return engine === 'cursor' ? 'Cursor' : engine === 'hermes' ? 'Hermes' : 'Claude';
+}
+function engineBadge(engine) {
+  return engine === 'cursor' ? 'CR' : engine === 'hermes' ? 'HM' : 'CC';
+}
 function engineLabel(v) {
-  return v?.engine === 'cursor' ? 'agent' : 'claude';
+  return v?.engine === 'cursor' ? 'agent' : v?.engine === 'hermes' ? 'hermes' : 'claude';
 }
 
 function appendSpinner(v) {
@@ -1003,7 +1012,7 @@ function attachChat(v, ch, { start, fresh } = {}) {
         if (e.session_id) {
           v.id = e.session_id;
           if (currentChatKey === v.key) {
-            const eng = v.engine === 'cursor' ? 'Cursor' : 'Claude';
+            const eng = engineName(v.engine);
             $('#chat-sub').textContent = `${eng}${v.cwd ? '  ·  ' + v.cwd : ''}  ·  ${v.id}`;
           }
         }
@@ -1201,14 +1210,14 @@ $('#input').addEventListener('keydown', (e) => {
 $('#perm-mode').addEventListener('change', () => localStorage.setItem('permMode', $('#perm-mode').value));
 if (localStorage.getItem('permMode')) $('#perm-mode').value = localStorage.getItem('permMode');
 function modelStorageKey(engine) {
-  return 'model:' + (engine === 'cursor' ? 'cursor' : 'claude');
+  return 'model:' + (engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : 'claude');
 }
 
 function syncModelSelector(engine) {
-  const eng = engine === 'cursor' ? 'cursor' : 'claude';
+  const eng = engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : 'claude';
   const sel = $('#model-sel');
-  for (const el of sel.querySelectorAll('.model-claude, .model-cursor')) {
-    el.hidden = el.classList.contains('model-cursor') ? eng !== 'cursor' : eng === 'cursor';
+  for (const el of sel.querySelectorAll('.model-claude, .model-cursor, .model-hermes')) {
+    el.hidden = !el.classList.contains('model-' + eng);
   }
   for (const opt of sel.querySelectorAll('option[data-engine]')) {
     opt.hidden = opt.dataset.engine !== eng;
@@ -1228,7 +1237,7 @@ function addModelOption(id, label, engine) {
   const opt = document.createElement('option');
   opt.value = id;
   opt.textContent = label || id;
-  opt.dataset.engine = eng === 'cursor' ? 'cursor' : 'claude';
+  opt.dataset.engine = eng === 'cursor' ? 'cursor' : eng === 'hermes' ? 'hermes' : 'claude';
   sel.insertBefore(opt, sel.querySelector('option[value="__custom__"]'));
 }
 
@@ -1259,7 +1268,7 @@ loadProviders();
 // split dropdown value into what chat.start needs; providers never apply to Cursor
 function resolveModelChoice(value, engine) {
   if (!value) return {};
-  if (engine === 'cursor') {
+  if (engine === 'cursor' || engine === 'hermes') {
     if (value.startsWith('provider:')) return {};
     return { model: value };
   }
@@ -1452,7 +1461,7 @@ function makeSessionItem(p, s) {
   const badge = document.createElement('span');
   const eng = s.engine || p.engine || 'claude';
   badge.className = 'engine-badge ' + eng;
-  badge.textContent = eng === 'cursor' ? 'CR' : 'CC';
+  badge.textContent = engineBadge(eng);
   t.appendChild(dot);
   t.appendChild(badge);
   t.appendChild(document.createTextNode(s.title));
@@ -1516,7 +1525,7 @@ function renderSessionList() {
     g.className = 'proj-group';
     const name = document.createElement('div');
     name.className = 'proj-name';
-    const prefix = p.engine === 'cursor' ? 'Cursor · ' : '';
+    const prefix = p.engine === 'cursor' ? 'Cursor · ' : p.engine === 'hermes' ? '' : '';
     name.textContent = prefix + (p.cwd || p.slug);
     name.title = p.cwd || p.slug;
     g.appendChild(name);
@@ -1729,7 +1738,7 @@ async function renderRunning() {
     const meta = document.createElement('div');
     meta.className = 'run-card-meta';
     meta.textContent = r.kind === 'cockpit'
-      ? `${fmtDur(Date.now() - r.since)} · ${r.model || '默认模型'} · ${r.engine === 'cursor' ? 'Cursor' : 'Cockpit'}`
+      ? `${fmtDur(Date.now() - r.since)} · ${r.model || '默认模型'} · ${engineName(r.engine)}`
       : '在 VSCode / 终端中运行';
     card.append(top, meta);
     if (r.activity) {
@@ -1867,7 +1876,7 @@ window.addEventListener('resize', () => {
   if (activeTermCh) terms.get(activeTermCh)?.fit.fit();
 });
 
-// ---------------- host switcher (本机 ↔ pcy-02) ----------------
+// ---------------- host switcher (本机 ↔ 其他 Cockpit) ----------------
 function peerHost(url) {
   try { return new URL(url, location.origin).host; } catch { return ''; }
 }
@@ -1914,6 +1923,9 @@ function openNewChatDialog(engine) {
 }
 $('#btn-new-chat').addEventListener('click', () => openNewChatDialog('claude'));
 $('#btn-new-cursor').addEventListener('click', () => openNewChatDialog('cursor'));
+$('#btn-new-hermes')?.addEventListener('click', () => {
+  newChat('', 'hermes');
+});
 $('#newchat-dialog').addEventListener('close', () => {
   if ($('#newchat-dialog').returnValue === 'ok') {
     const f = $('#newchat-form');

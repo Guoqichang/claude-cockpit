@@ -402,7 +402,7 @@
     card.innerHTML = `
       <div class="gc-head"><span class="gc-dot" style="background:${nodeColor(n)}"></span>
         <span class="gc-title">${escapeHtml(n.title)}</span>
-        <span class="gc-engine ${n.engine}">${n.engine === 'cursor' ? 'CR' : 'CC'}</span></div>
+        <span class="gc-engine ${n.engine}">${n.engine === 'cursor' ? 'CR' : n.engine === 'hermes' ? 'HM' : 'CC'}</span></div>
       <div class="gc-meta">${n.msgCount == null ? '长会话' : n.msgCount + ' 条'} ·
         ${fmtAge(n.ageHours)} · 注意力 ${n.attention}${n.lastCost != null ? ' · $' + n.lastCost.toFixed(3) : ''}</div>
       <div class="gc-cwd">${escapeHtml(n.cwd || '')}</div>
