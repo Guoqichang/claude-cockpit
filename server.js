@@ -17,7 +17,7 @@ import QRCode from 'qrcode';
 import { getKeys, addSub, removeSub, subCount, notify } from './lib/push.js';
 import { listProviders } from './lib/providers.js';
 import { holdAwake, releaseAwake, status as awakeStatus } from './lib/awake.js';
-import { isIndexedFilePath } from './lib/cursor-uploads.js';
+import { isServableMediaPath } from './lib/cursor-uploads.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 7799);
@@ -100,7 +100,7 @@ app.get('/api/session/:slug/:id', (req, res) => {
 app.get('/api/local-file', (req, res) => {
   const raw = req.query.path;
   const fp = Array.isArray(raw) ? raw[0] : raw;
-  if (!isIndexedFilePath(fp)) { res.status(403).json({ error: 'forbidden' }); return; }
+  if (!isServableMediaPath(fp)) { res.status(403).json({ error: 'forbidden' }); return; }
   const real = fs.realpathSync(fp);
   res.sendFile(real, { headers: { 'Cache-Control': 'private, max-age=86400' } }, (err) => {
     if (err && !res.headersSent) res.status(404).end();

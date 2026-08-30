@@ -98,6 +98,16 @@ function typeset(el) {
       a.title = href;
     }
   }
+  // Claude writes `![](/Users/…/foo.png)` — the browser would hit 127.0.0.1/Users/…
+  for (const img of el.querySelectorAll('img[src]')) {
+    const src = img.getAttribute('src') || '';
+    if (/^(https?:|data:|blob:|\/api\/)/i.test(src)) continue;
+    const fp = src.replace(/^file:\/\//i, '');
+    if (!fp || fp.startsWith('//')) continue;
+    img.src = '/api/local-file?path=' + encodeURIComponent(fp);
+    img.loading = 'lazy';
+    img.addEventListener('click', () => window.open(img.src, '_blank', 'width=1100,height=850'));
+  }
 }
 
 // The cockpit is a single-page app (and runs in a frameless Edge --app window):
@@ -264,7 +274,7 @@ function renderBlocks(container, role, blocks, toolMap) {
         const strip = document.createElement('div');
         strip.className = 'msg-images tool-images';
         for (const im of b.images) {
-          const src = `data:${im.mediaType || 'image/png'};base64,${im.data}`;
+          const src = im.url || `data:${im.mediaType || 'image/png'};base64,${im.data}`;
           const img = document.createElement('img');
           img.src = src;
           img.loading = 'lazy';
