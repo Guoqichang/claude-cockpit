@@ -1,6 +1,6 @@
 ---
 name: claude-cockpit
-description: "调用本机 Claude Cockpit：列出/阅读 Claude Code、Cursor、Hermes 会话，并发起一轮对话。当用户要在 Cockpit 里开/续 Claude 或 Cursor 会话、查看驾驶舱里的对话、或把结果写回 Cockpit 时使用。"
+description: "调用本机 Claude Cockpit：列出/阅读 Claude Code、Cursor、Hermes、OpenCode 会话，并发起一轮对话。当用户要在 Cockpit 里开/续会话、查看驾驶舱里的对话、或把结果写回 Cockpit 时使用。"
 ---
 
 # Claude Cockpit
@@ -22,7 +22,7 @@ description: "调用本机 Claude Cockpit：列出/阅读 Claude Code、Cursor�
 URL="${COCKPIT_URL:-http://127.0.0.1:7799}"
 TOK="${COCKPIT_TOKEN:-}"
 if [ -z "$TOK" ] && [ -f "$HOME/.claude-cockpit/auth.json" ]; then
-  TOK=$(python3 -c "import json; print(json.load(open('$HOME/.claude-cockpit/auth.json')).get('token',''))")
+  TOK=$(python3 -c "import json; print(json.load(open('$HOME/.claude-cockpit/auth.json')).get('token',''))" 2>/dev/null || python -c "import json; print(json.load(open(r'$HOME/.claude-cockpit/auth.json')).get('token',''))")
 fi
 H=()
 [ -n "$TOK" ] && H=(-H "Authorization: Bearer $TOK")
@@ -32,10 +32,12 @@ H=()
 
 ```bash
 curl -sS "${H[@]}" "$URL/api/open/sessions?limit=40"
-# 可选 ?engine=claude|cursor|hermes  和  ?q=关键词
+# 可选 ?engine=claude|cursor|hermes|opencode  和  ?q=关键词
 ```
 
 返回数组：`engine, slug, id, title, cwd, mtimeMs, msgCount`。
+
+OpenCode 的 `id` 形如 `ses_*`，`slug` 形如 `opencode:reverse`。
 
 ## 读会话
 
@@ -43,23 +45,24 @@ curl -sS "${H[@]}" "$URL/api/open/sessions?limit=40"
 curl -sS "${H[@]}" "$URL/api/open/session/<slug>/<id>?limit=40"
 ```
 
-`slug` 原样使用（Claude 是项目 slug，Cursor 是 `cursor:…`，Hermes 是 `hermes:telegram` / `hermes:cli`）。
+`slug` 原样使用（Claude 是项目 slug，Cursor 是 `cursor:…`，Hermes 是 `hermes:telegram` / `hermes:cli`，OpenCode 是 `opencode:reverse` 等）。
 
 ## 发起一轮
 
 ```bash
 curl -sS "${H[@]}" -H 'Content-Type: application/json' \
-  -d '{"engine":"claude","prompt":"……","wait":true,"timeoutMs":180000}' \
+  -d '{"engine":"opencode","prompt":"……","wait":true,"timeoutMs":180000}' \
   "$URL/api/open/chat"
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `engine` | `claude`（默认）/ `cursor` / `hermes` |
+| `engine` | `claude`（默认）/ `cursor` / `hermes` / `opencode` |
 | `prompt` | 本轮用户话（必填） |
 | `resume` / `sessionId` | 续聊已有会话 |
-| `cwd` | 新 Claude/Cursor 会话的工作目录 |
-| `model` | 可选 |
+| `cwd` | 新 Claude/Cursor/OpenCode 会话的工作目录 |
+| `model` | 可选。OpenCode 用 `deepseek/deepseek-v4-pro` 这种 `供应商/模型` |
+| `agent` | 仅 OpenCode，默认 `reverse` |
 | `wait` | 默认 `true`，等本轮结束再返回 `{sessionId, text, code}` |
 | `timeoutMs` | 默认 180000 |
 
@@ -69,6 +72,6 @@ curl -sS "${H[@]}" -H 'Content-Type: application/json' \
 
 ## 用法
 
-- 用户说「在 Cockpit 里用 Claude 做某事」→ `engine=claude`，需要续旧会话就先 `?q=` 搜再带 `resume`。
+- 用户说「在 Cockpit 里用 OpenCode / Claude 做某事」→ 带对应 `engine`；续旧会话就先 `?q=` 搜再带 `resume`。
 - 用户说「看一下驾驶舱里那个会话」→ `open/sessions` + `open/session`。
 - 不要把密钥写进 prompt。把结果用一两段话回给用户，并带上 `sessionId`。

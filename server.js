@@ -6,13 +6,17 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import { listProjects, readSession, findSessionMeta } from './lib/session-router.js';
+import { searchSessions } from './lib/search.js';
 import { allNames, setName } from './lib/names.js';
 import { buildGraph } from './lib/graph.js';
 import { startChat, subscribe, stopChat, hasChat, listChats, restoreChats, onChatDone, waitForChat } from './lib/chat.js';
 import { hermesStatus } from './lib/hermes.js';
+import { ocStatus, ocMcp, ocBinOk, ensureServe } from './lib/opencode.js';
+import { setupStatus, setupPresets, saveOpencodeKey, installOpencode, pingServe } from './lib/setup.js';
 import { listCommands } from './lib/commands.js';
 import { getActive } from './lib/active.js';
 import { openLocalTerm, openSshTerm } from './lib/term.js';
+import { execFileSync } from 'child_process';
 import { getToken, rotateToken, checkToken, clientKey, isLocked, noteFailure, noteSuccess, COOKIE_NAME } from './lib/auth.js';
 import QRCode from 'qrcode';
 import { getKeys, addSub, removeSub, subCount, notify } from './lib/push.js';
@@ -97,9 +101,60 @@ app.get('/api/session/:slug/:id', async (req, res) => {
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+app.get('/api/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const engine = String(req.query.engine || '').trim();
+    const hits = await searchSessions(q, { engine });
+    res.json({ q, hits });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 app.get('/api/hermes/status', (req, res) => {
   try { res.json(hermesStatus()); }
   catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/opencode/status', (req, res) => {
+  try { res.json(ocStatus()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/opencode/mcp', async (req, res) => {
+  try { res.json(await ocMcp()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+function setupLocalOnly(req, res) {
+  if (needsAuth(req)) {
+    res.status(403).json({ error: '部署向导只在本机 7799 可用，避免从公网改密钥' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/setup/status', (req, res) => {
+  if (!setupLocalOnly(req, res)) return;
+  try { res.json({ ...setupStatus(), presets: setupPresets() }); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.post('/api/setup/opencode-key', (req, res) => {
+  if (!setupLocalOnly(req, res)) return;
+  try { res.json(saveOpencodeKey(req.body || {})); }
+  catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+
+app.post('/api/setup/opencode-install', async (req, res) => {
+  if (!setupLocalOnly(req, res)) return;
+  try { res.json(await installOpencode()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.post('/api/setup/opencode-serve', async (req, res) => {
+  if (!setupLocalOnly(req, res)) return;
+  try { res.json(await pingServe()); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
 function flattenSessions(projects) {
@@ -145,13 +200,14 @@ app.get('/api/open/chats', (req, res) => {
 app.post('/api/open/chat', async (req, res) => {
   try {
     const b = req.body || {};
-    const engine = b.engine === 'hermes' || b.engine === 'cursor' ? b.engine : 'claude';
+    const engine = b.engine === 'hermes' || b.engine === 'cursor' || b.engine === 'opencode' ? b.engine : 'claude';
     const prompt = String(b.prompt || b.message || '').trim();
     if (!prompt) { res.status(400).json({ error: 'prompt required' }); return; }
     const ch = 'o' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
     startChat(ch, {
       engine, cwd: b.cwd, resume: b.resume || b.sessionId,
       prompt, model: b.model, permissionMode: b.permissionMode, provider: b.provider,
+      agent: b.agent,
     });
     const wait = b.wait !== false;
     if (!wait) { res.json({ ch, sessionId: b.resume || null, running: true }); return; }
@@ -398,7 +454,8 @@ wss.on('connection', (ws, req) => {
       if (hasChat(ch)) { bind(ch, 0); return; }
       try {
         startChat(ch, { cwd: m.cwd, resume: m.resume, permissionMode: m.permissionMode, prompt: m.prompt,
-                        model: m.model, attachments: m.attachments, provider: m.provider, engine: m.engine });
+                        model: m.model, attachments: m.attachments, provider: m.provider, engine: m.engine,
+                        agent: m.agent });
       } catch (e) {
         send({ op: 'chat.error', ch, error: String(e.message || e) });
         send({ op: 'chat.done', ch, code: -1, stderr: '' });
@@ -480,21 +537,43 @@ onChatDone(async ({ sessionId, code, result, startedAt, cwd }) => {
 // SIGHUP (terminal closed) must not take the service down with it
 process.on('SIGHUP', () => log('SIGHUP ignored — service stays up'));
 
+function tailscaleV4() {
+  const pinned = (readConfig().tailscaleBind || '').trim();
+  if (/^100\.\d+\.\d+\.\d+$/.test(pinned)) return pinned;
+  try {
+    const ip = execFileSync('tailscale', ['ip', '-4'], { encoding: 'utf8', timeout: 3000 })
+      .trim().split(/\s+/)[0];
+    return /^100\.\d+\.\d+\.\d+$/.test(ip) ? ip : '';
+  } catch { return ''; }
+}
+
 // Local desktop: 127.0.0.1:PORT, no token. Tailscale/tunnel: AUTH_PORT (or
 // AUTH_ONLY on PORT) always demands the token.
 if (!AUTH_ONLY) {
   server.listen(PORT, '127.0.0.1', () => {
     const n = restoreChats();
     console.log(`claude-cockpit: http://127.0.0.1:${PORT}${n ? ` (恢复 ${n} 个运行中的轮次)` : ''}`);
+    if (ocBinOk()) ensureServe().catch((err) => console.log('opencode serve:', err.message || err));
   });
   authServer.listen(AUTH_PORT, '127.0.0.1', () => {
     getToken();
     console.log(`claude-cockpit auth listener: 127.0.0.1:${AUTH_PORT} (需要令牌)`);
   });
+  // same AUTH_PORT on the Tailscale address so pcy-02 / phone on the tailnet
+  // can reach this Mac without going through the public reverse tunnel
+  const ts = tailscaleV4();
+  if (ts) {
+    const tsServer = http.createServer(app);
+    wireUpgrade(tsServer, { requireAuth: true, originMode: 'public' });
+    tsServer.listen(AUTH_PORT, ts, () => {
+      console.log(`claude-cockpit tailscale: ${ts}:${AUTH_PORT} (需要令牌)`);
+    });
+  }
 } else {
   authServer.listen(PORT, BIND, () => {
     getToken();
     const n = restoreChats();
     console.log(`claude-cockpit: ${BIND}:${PORT} (AUTH_ONLY${n ? `, 恢复 ${n} 个运行中的轮次` : ''})`);
+    if (ocBinOk()) ensureServe().catch((err) => console.log('opencode serve:', err.message || err));
   });
 }

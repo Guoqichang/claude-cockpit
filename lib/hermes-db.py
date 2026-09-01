@@ -197,6 +197,94 @@ def find_meta(sid):
     print(json.dumps(meta, ensure_ascii=False))
 
 
+def snippet_around(text, q, radius=42):
+    raw = " ".join(str(text or "").split())
+    if not raw:
+        return ""
+    i = raw.lower().find(q.lower())
+    if i < 0:
+        return raw[:80]
+    start = max(0, i - radius)
+    end = min(len(raw), i + len(q) + radius)
+    return ("…" if start else "") + raw[start:end] + ("…" if end < len(raw) else "")
+
+
+def table_names(con):
+    return {
+        r[0]
+        for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        ).fetchall()
+    }
+
+
+def try_fts(con, q, limit):
+    if "messages_fts" not in table_names(con):
+        return None
+    token = q.replace('"', " ").strip()
+    if not token:
+        return None
+    try:
+        return con.execute(
+            """
+            SELECT m.session_id, m.content, s.source, s.title
+            FROM messages_fts f
+            JOIN messages m ON m.rowid = f.rowid
+            JOIN sessions s ON s.id = m.session_id
+            WHERE messages_fts MATCH ?
+              AND COALESCE(s.hidden, 0) = 0
+              AND COALESCE(s.archived, 0) = 0
+            LIMIT ?
+            """,
+            (f'"{token}"', limit),
+        ).fetchall()
+    except Exception:
+        return None
+
+
+def search(q, limit=50):
+    q = (q or "").strip()[:80]
+    if not q:
+        print("[]")
+        return
+    con = connect()
+    like = "%" + q.replace("%", "").replace("_", "") + "%"
+    rows = try_fts(con, q, limit * 4)
+    if rows is None:
+        rows = con.execute(
+            """
+            SELECT m.session_id, m.content, s.source, s.title
+            FROM messages m
+            JOIN sessions s ON s.id = m.session_id
+            WHERE COALESCE(m.active, 1) = 1
+              AND COALESCE(s.hidden, 0) = 0
+              AND COALESCE(s.archived, 0) = 0
+              AND m.content LIKE ?
+            ORDER BY m.id DESC
+            LIMIT ?
+            """,
+            (like, limit * 4),
+        ).fetchall()
+    seen = {}
+    for r in rows:
+        sid = r["session_id"]
+        if sid in seen:
+            continue
+        text = content_text(r["content"])
+        if q.lower() not in text.lower():
+            text = str(r["content"] or "")
+        seen[sid] = {
+            "id": sid,
+            "slug": "hermes:" + (r["source"] or "cli"),
+            "engine": "hermes",
+            "title": r["title"] or sid,
+            "snippet": snippet_around(text, q),
+        }
+        if len(seen) >= limit:
+            break
+    print(json.dumps(list(seen.values()), ensure_ascii=False))
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "list"
     if cmd == "list":
@@ -208,6 +296,10 @@ def main():
         read_session(sid, end, limit)
     elif cmd == "meta":
         find_meta(sys.argv[2])
+    elif cmd == "search":
+        q = sys.argv[2] if len(sys.argv) > 2 else ""
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 50
+        search(q, limit)
     else:
         raise SystemExit("bad-cmd")
 

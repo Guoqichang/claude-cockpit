@@ -23,7 +23,7 @@ fi
 mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
 
 # ~/.local/bin 里通常有 claude；PATH 必须带上，否则 Agent 找不到 CLI
-PATH_VALUE="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+PATH_VALUE="$HOME/.opencode/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 if [ -n "${PATH:-}" ]; then
   PATH_VALUE="$PATH_VALUE:$PATH"
 fi

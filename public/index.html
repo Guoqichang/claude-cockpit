@@ -26,6 +26,7 @@
       <span class="brand">Claude Cockpit</span>
       <select id="peer-sel" title="会话所在机器" hidden></select>
       <span class="side-head-btns">
+        <button id="btn-setup" title="部署向导">◎</button>
         <button id="btn-phone" title="手机访问">▤</button>
         <button id="btn-refresh" title="刷新会话列表">⟳</button>
       </span>
@@ -34,22 +35,73 @@
       <button id="btn-new-chat">＋ Claude</button>
       <button id="btn-new-cursor">＋ Cursor</button>
       <button id="btn-new-hermes">＋ Hermes</button>
+      <button id="btn-new-opencode">＋ OpenCode</button>
       <button id="btn-new-term">本地终端</button>
       <button id="btn-new-ssh">SSH</button>
     </div>
     <div class="side-actions">
       <button id="btn-open-graph">◍ 会话图谱</button>
     </div>
-    <input id="filter" type="text" placeholder="筛选会话…">
+    <input id="filter" type="text" placeholder="筛选标题或对话内容…">
     <div id="term-list" class="side-section"></div>
     <div id="session-list" class="side-section grow"></div>
   </aside>
 
   <main id="main">
     <div id="welcome" class="view">
-      <div class="welcome-inner">
+      <div class="welcome-inner" id="welcome-idle">
         <h1>Claude Cockpit</h1>
-        <p>左侧选择一个 Claude Code、Cursor Agent 或 Hermes 会话继续对话；<br>或打开本地终端 / SSH 远程终端。</p>
+        <p>左侧选一个会话继续聊，或开本地终端 / SSH。<br>第一次来：先把 OpenCode 跑通，再接别的引擎。</p>
+        <p><button type="button" class="setup-open-btn" id="btn-open-setup">打开部署向导</button></p>
+      </div>
+      <div id="setup-panel" class="setup-panel" hidden>
+        <div class="setup-head">
+          <h1>先把 OpenCode 跑通</h1>
+          <p class="setup-lead">别一上来装 Claude Code。OpenCode 一个命令、一把 Key，Cockpit 就能聊。这条飞轮转起来，再接 Cursor / Claude / Hermes。</p>
+        </div>
+        <ol class="setup-steps">
+          <li id="setup-step-env">
+            <h2>1. 这台电脑缺什么</h2>
+            <ul class="setup-dots" id="setup-dots"></ul>
+          </li>
+          <li id="setup-step-bin">
+            <h2>2. 装 OpenCode</h2>
+            <p id="setup-bin-msg"></p>
+            <pre class="setup-cmd" id="setup-bin-cmd" hidden></pre>
+            <button type="button" id="setup-install-btn">替我安装</button>
+            <p class="setup-note" id="setup-install-log" hidden></p>
+          </li>
+          <li id="setup-step-key">
+            <h2>3. 贴一把 API Key</h2>
+            <p>推荐 DeepSeek 官方：打开 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys</a>，新建一把，整段贴进来。Key 只写进你电脑上的 <span class="tag">~/.config/opencode/opencode.json</span>，不会进仓库、不会出现在回复里。</p>
+            <label class="setup-field">供应商
+              <select id="setup-provider"></select>
+            </label>
+            <label class="setup-field" id="setup-base-wrap" hidden>兼容网关地址
+              <input id="setup-baseurl" type="url" placeholder="https://api.example.com/v1" autocomplete="off">
+            </label>
+            <label class="setup-field">API Key
+              <input id="setup-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false">
+            </label>
+            <button type="button" id="setup-save-key">写下这把 Key</button>
+            <p class="setup-note" id="setup-key-msg"></p>
+          </li>
+          <li id="setup-step-go">
+            <h2>4. 先聊一句</h2>
+            <p id="setup-go-msg">Key 写好之后，点下面按钮：Cockpit 会拉起 <span class="tag">opencode serve</span>，并开一个 reverse 会话。</p>
+            <button type="button" id="setup-go-btn" disabled>＋ 开一条 OpenCode</button>
+            <p class="setup-note">之后左侧会出现 OpenCode 分组。Claude / Cursor / Hermes 有了再点对应的 ＋ 按钮，不必现在装。</p>
+          </li>
+        </ol>
+        <details class="setup-more">
+          <summary>再接 Claude / Cursor / Hermes（可选）</summary>
+          <ul>
+            <li><b>Claude Code</b>：装好官方 CLI，保证终端里能敲 <span class="tag">claude</span>，然后点「＋ Claude」。</li>
+            <li><b>Cursor Agent</b>：本机装过 Cursor 即可。点「＋ Cursor」。</li>
+            <li><b>Hermes</b>：本机有 <span class="tag">~/.hermes/state.db</span> 就会出现在侧栏。</li>
+          </ul>
+        </details>
+        <p class="setup-dismiss"><button type="button" id="setup-skip">先看看界面</button></p>
       </div>
     </div>
 
@@ -108,6 +160,10 @@
                 <option value="DeepSeek-V4-Pro">DeepSeek V4 Pro</option>
                 <option value="GLM-5.1">GLM-5.1</option>
               </optgroup>
+              <optgroup id="og-opencode" class="model-opencode" label="OpenCode · reverse" hidden>
+                <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro（官方）</option>
+                <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash</option>
+              </optgroup>
               <optgroup id="og-cursor" class="model-cursor" label="Cursor Agent" hidden>
                 <option value="composer-2.5">Composer 2.5</option>
                 <option value="claude-opus-5-thinking-high">Opus 5 Thinking</option>
@@ -130,7 +186,28 @@
           </label>
         </div>
       </header>
-      <div id="messages"></div>
+      <div id="chat-body">
+        <div id="messages"></div>
+        <aside id="oc-rail" hidden>
+          <div id="oc-rail-title"></div>
+          <section class="oc-sec">
+            <div class="oc-sec-h">Context</div>
+            <div id="oc-rail-ctx"></div>
+          </section>
+          <section class="oc-sec">
+            <div class="oc-sec-h">▼ MCP</div>
+            <div id="oc-rail-mcp"></div>
+          </section>
+          <section class="oc-sec">
+            <div class="oc-sec-h">Todo</div>
+            <div id="oc-rail-todo"></div>
+          </section>
+          <section class="oc-sec">
+            <div class="oc-sec-h">LSP</div>
+            <div class="oc-sec-lsp">LSPs are disabled</div>
+          </section>
+        </aside>
+      </div>
       <div id="composer">
         <div class="composer-main">
           <div id="attach-strip" hidden></div>
@@ -145,6 +222,7 @@
           <input id="file-input" type="file" multiple hidden>
         </div>
       </div>
+      <div id="oc-bar" hidden></div>
     </div>
 
     <div id="term-view" class="view" hidden>
@@ -192,6 +270,7 @@
         <option value="claude" selected>Claude Code</option>
         <option value="cursor">Cursor Agent</option>
         <option value="hermes">Hermes Agent</option>
+        <option value="opencode">OpenCode · reverse</option>
       </select>
     </label>
     <label>工作目录 <input name="cwd" placeholder="/path/to/project"></label>
@@ -210,6 +289,7 @@
 <script src="/vendor/xterm-fit/lib/addon-fit.js"></script>
 <script src="/icons.js"></script>
 <script src="/app.js"></script>
+<script src="/setup.js"></script>
 <script src="/graph.js"></script>
 </body>
 </html>

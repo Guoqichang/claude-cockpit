@@ -17,6 +17,9 @@
   let raf = null, ticks = 0;
   let selected = null, hovered = null;
   let pollTimer = null;
+  let contentHitIds = new Set();
+  let searchGen = 0;
+  let searchTimer = 0;
 
   // camera: screen = world · k + (tx, ty)
   const view = { k: 1, tx: 0, ty: 0 };
@@ -325,7 +328,11 @@
 
     for (const b of sim) {
       const n = b.n;
-      const dim = q && !(n.title.toLowerCase().includes(q) || (n.cwd || '').toLowerCase().includes(q));
+      const dim = q && !(
+        n.title.toLowerCase().includes(q)
+        || (n.cwd || '').toLowerCase().includes(q)
+        || contentHitIds.has(n.id)
+      );
       const g = el('g', {
         class: 'gnode ' + stateOf(n) + (dim ? ' dim' : '') + (selected === n.id ? ' sel' : ''),
         transform: `translate(${b.x.toFixed(1)},${b.y.toFixed(1)})`,
@@ -402,7 +409,7 @@
     card.innerHTML = `
       <div class="gc-head"><span class="gc-dot" style="background:${nodeColor(n)}"></span>
         <span class="gc-title">${escapeHtml(n.title)}</span>
-        <span class="gc-engine ${n.engine}">${n.engine === 'cursor' ? 'CR' : n.engine === 'hermes' ? 'HM' : 'CC'}</span></div>
+        <span class="gc-engine ${n.engine}">${n.engine === 'cursor' ? 'CR' : n.engine === 'hermes' ? 'HM' : n.engine === 'opencode' ? 'OC' : 'CC'}</span></div>
       <div class="gc-meta">${n.msgCount == null ? '长会话' : n.msgCount + ' 条'} ·
         ${fmtAge(n.ageHours)} · 注意力 ${n.attention}${n.lastCost != null ? ' · $' + n.lastCost.toFixed(3) : ''}</div>
       <div class="gc-cwd">${escapeHtml(n.cwd || '')}</div>
@@ -479,7 +486,28 @@
   document.getElementById('graph-refresh').addEventListener('click', () => { userMoved = false; load(true); });
   document.getElementById('graph-attention').addEventListener('change', () => { userMoved = false; kick(); });
   document.getElementById('graph-clusters').addEventListener('change', () => { userMoved = false; kick(); });
-  document.getElementById('graph-filter').addEventListener('input', () => { if (!raf) render(); });
+  document.getElementById('graph-filter').addEventListener('input', () => {
+    const q = document.getElementById('graph-filter').value.trim();
+    clearTimeout(searchTimer);
+    if (!q) {
+      searchGen++;
+      contentHitIds = new Set();
+      if (!raf) render();
+      return;
+    }
+    if (!raf) render();
+    const gen = ++searchGen;
+    searchTimer = setTimeout(async () => {
+      try {
+        const d = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+        if (gen !== searchGen) return;
+        contentHitIds = new Set((d.hits || []).map(h => h.id).filter(Boolean));
+      } catch {
+        if (gen !== searchGen) return;
+      }
+      if (!raf) render();
+    }, 280);
+  });
   svg.addEventListener('click', () => {
     if (squelchClick) { squelchClick = false; return; }
     selected = null; hideCard();

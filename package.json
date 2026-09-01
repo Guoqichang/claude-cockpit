@@ -1,7 +1,7 @@
 {
   "name": "claude-cockpit",
-  "version": "0.1.0",
-  "description": "Local web cockpit for Claude Code: session browser, markdown chat, embedded terminal, SSH remote",
+  "version": "0.2.0",
+  "description": "Local web cockpit for OpenCode, Claude Code, Cursor, and Hermes",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -12,6 +12,7 @@
   },
   "homepage": "https://github.com/Guoqichang/claude-cockpit#readme",
   "keywords": [
+    "opencode",
     "claude-code",
     "claude",
     "cockpit",
@@ -24,7 +25,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
+    "setup": "node server.js",
+    "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

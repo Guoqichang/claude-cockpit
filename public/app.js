@@ -9,6 +9,257 @@ marked.setOptions({ gfm: true, breaks: true });
 
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+function ocSyn(kind, text) {
+  return `<span class="oc-syn-${kind}">${escapeHtml(text)}</span>`;
+}
+
+const OC_KW = {
+  python: 'False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield'.split(' '),
+  javascript: 'async await break case catch class const continue debugger default delete else export extends finally for function if import in instanceof let new of return static super switch this throw try typeof var void while yield true false null undefined'.split(' '),
+  typescript: 'as async await break case catch class const continue declare default delete else enum export extends finally for from function if implements import in interface instanceof let new of private protected public return static super switch this throw try type typeof var void while yield true false null undefined'.split(' '),
+  bash: 'if then else elif fi for do done in case esac function return export local source alias set unset while until select time coproc'.split(' '),
+  go: 'break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var true false nil'.split(' '),
+  rust: 'as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while'.split(' '),
+};
+OC_KW.js = OC_KW.javascript;
+OC_KW.ts = OC_KW.typescript;
+OC_KW.py = OC_KW.python;
+OC_KW.sh = OC_KW.bash;
+OC_KW.shell = OC_KW.bash;
+OC_KW.zsh = OC_KW.bash;
+const OC_KW_SET = Object.fromEntries(Object.entries(OC_KW).map(([k, v]) => [k, new Set(v)]));
+const OC_BUILTIN = new Set('self this super console process window document print len range open type int str list dict set True False None NoneType undefined NaN module exports require __name__ __init__ cd ls cat grep awk sed curl wget git npm npx node python python3 pip echo printf export source'.split(' '));
+const OC_PATH_RE = /(?:\/(?:[\w.-]+\/)*[\w.-]+|\b[\w.-]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|json|md|sh|zsh|bash|html|css|scss|go|rs|vue|toml|yml|yaml|sql|txt|svg|png|jpg)\b)/;
+
+function ocTokPlain(src) {
+  const s = String(src || '');
+  const re = /(?:\/(?:[\w.-]+\/)*[\w.-]+|\b[\w.-]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|json|md|sh|zsh|bash|html|css|scss|go|rs|vue|toml|yml|yaml|sql|txt|svg|png|jpg)\b)/g;
+  let last = 0, out = '';
+  for (const m of s.matchAll(re)) {
+    out += escapeHtml(s.slice(last, m.index));
+    out += ocSyn('variable', m[0]);
+    last = m.index + m[0].length;
+  }
+  return out + escapeHtml(s.slice(last));
+}
+
+function ocTokJson(src) {
+  const s = String(src || '');
+  let i = 0, out = '';
+  const n = s.length;
+  while (i < n) {
+    const c = s[i];
+    if (c === '"') {
+      let j = i + 1, esc = false;
+      while (j < n) {
+        const ch = s[j];
+        if (esc) { esc = false; j++; continue; }
+        if (ch === '\\') { esc = true; j++; continue; }
+        if (ch === '"') { j++; break; }
+        j++;
+      }
+      const tok = s.slice(i, j);
+      let k = j;
+      while (k < n && /\s/.test(s[k])) k++;
+      out += ocSyn(s[k] === ':' ? 'variable' : 'string', tok);
+      i = j;
+      continue;
+    }
+    if (c === '-' || (c >= '0' && c <= '9')) {
+      let j = i + 1;
+      while (j < n && /[\d.eE+-]/.test(s[j])) j++;
+      out += ocSyn('number', s.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z]/.test(c)) {
+      let j = i + 1;
+      while (j < n && /[A-Za-z]/.test(s[j])) j++;
+      const w = s.slice(i, j);
+      out += (w === 'true' || w === 'false' || w === 'null') ? ocSyn('keyword', w) : escapeHtml(w);
+      i = j;
+      continue;
+    }
+    out += /[{}\[\]:,]/.test(c) ? ocSyn('punct', c) : escapeHtml(c);
+    i++;
+  }
+  return out;
+}
+
+function ocTokDiff(src) {
+  return String(src || '').split('\n').map((line) => {
+    if (line.startsWith('+') && !line.startsWith('+++')) return ocSyn('string', line);
+    if (line.startsWith('-') && !line.startsWith('---')) return ocSyn('variable', line);
+    if (line.startsWith('@@')) return ocSyn('function', line);
+    return escapeHtml(line);
+  }).join('\n');
+}
+
+function ocTokHttp(src) {
+  return String(src || '').split('\n').map((line) => {
+    const m = line.match(/^(\s*)(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)(.*)$/);
+    if (!m) return ocTokPlain(line);
+    return escapeHtml(m[1]) + ocSyn('keyword', m[2]) + ' ' + ocSyn('string', m[3]) + ocTokPlain(m[4]);
+  }).join('\n');
+}
+
+function ocTokBash(src) {
+  const s = String(src || '');
+  let i = 0, out = '';
+  const n = s.length;
+  const kw = OC_KW_SET.bash;
+  while (i < n) {
+    if (s[i] === '#') {
+      let j = s.indexOf('\n', i);
+      if (j < 0) j = n;
+      out += ocSyn('comment', s.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (s[i] === '"' || s[i] === "'") {
+      const q = s[i];
+      let j = i + 1;
+      while (j < n && s[j] !== q) { if (s[j] === '\\') j++; j++; }
+      j = Math.min(n, j + 1);
+      out += ocSyn('string', s.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (s[i] === '$') {
+      let j = i + 1;
+      if (s[j] === '{') { while (j < n && s[j] !== '}') j++; j++; }
+      else while (j < n && /[\w-]/.test(s[j])) j++;
+      out += ocSyn('variable', s.slice(i, Math.max(i + 1, j)));
+      i = Math.max(i + 1, j);
+      continue;
+    }
+    if (s[i] === '-' && i + 1 < n && /[A-Za-z-]/.test(s[i + 1])) {
+      let j = i + 1;
+      while (j < n && /[\w-]/.test(s[j])) j++;
+      out += ocSyn('operator', s.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_./~]/.test(s[i])) {
+      let j = i + 1;
+      while (j < n && /[\w./:@~+-]/.test(s[j])) j++;
+      const w = s.slice(i, j);
+      if (OC_PATH_RE.test(w) || w.includes('/')) out += ocSyn('variable', w);
+      else if (kw.has(w)) out += ocSyn('keyword', w);
+      else if (OC_BUILTIN.has(w)) out += ocSyn('variable', w);
+      else {
+        let k = j;
+        while (k < n && /\s/.test(s[k])) k++;
+        out += s[k] === '=' ? ocSyn('variable', w) : ocSyn('function', w);
+      }
+      i = j;
+      continue;
+    }
+    out += escapeHtml(s[i++]);
+  }
+  return out;
+}
+
+function ocTokCode(src, lang) {
+  const s = String(src || '');
+  const kw = OC_KW_SET[lang] || OC_KW_SET.javascript;
+  const hashComment = lang === 'python' || lang === 'py' || lang === 'yaml' || lang === 'yml' || lang === 'toml';
+  const slashComment = !hashComment;
+  let i = 0, out = '';
+  const n = s.length;
+  while (i < n) {
+    if (hashComment && s[i] === '#') {
+      let j = s.indexOf('\n', i); if (j < 0) j = n;
+      out += ocSyn('comment', s.slice(i, j)); i = j; continue;
+    }
+    if (slashComment && s.startsWith('//', i)) {
+      let j = s.indexOf('\n', i); if (j < 0) j = n;
+      out += ocSyn('comment', s.slice(i, j)); i = j; continue;
+    }
+    if (s.startsWith('/*', i)) {
+      let j = s.indexOf('*/', i + 2); j = j < 0 ? n : j + 2;
+      out += ocSyn('comment', s.slice(i, j)); i = j; continue;
+    }
+    if (s[i] === '"' || s[i] === "'" || s[i] === '`') {
+      const q = s[i];
+      let j = i + 1, esc = false;
+      while (j < n) {
+        if (esc) { esc = false; j++; continue; }
+        if (s[j] === '\\') { esc = true; j++; continue; }
+        if (s[j] === q) { j++; break; }
+        if (q !== '`' && s[j] === '\n') break;
+        j++;
+      }
+      out += ocSyn('string', s.slice(i, j)); i = j; continue;
+    }
+    if (s[i] === '-' || (s[i] >= '0' && s[i] <= '9')) {
+      if (s[i] === '-' && !(s[i + 1] >= '0' && s[i + 1] <= '9')) { out += ocSyn('operator', '-'); i++; continue; }
+      let j = i + 1;
+      while (j < n && /[\d.xa-fA-F_]/.test(s[j])) j++;
+      out += ocSyn('number', s.slice(i, j)); i = j; continue;
+    }
+    if (/[A-Za-z_/$]/.test(s[i])) {
+      let j = i + 1;
+      while (j < n && /[\w$]/.test(s[j])) j++;
+      const w = s.slice(i, j);
+      let k = j; while (k < n && /\s/.test(s[k])) k++;
+      if (kw.has(w)) out += ocSyn('keyword', w);
+      else if (OC_BUILTIN.has(w)) out += ocSyn('variable', w);
+      else if (s[k] === '(') out += ocSyn('function', w);
+      else if (/^[A-Z]/.test(w) && w.length > 1) out += ocSyn('type', w);
+      else out += escapeHtml(w);
+      i = j; continue;
+    }
+    if (/[+\-*/%=<>!&|^~?:]/.test(s[i])) {
+      let j = i + 1;
+      while (j < n && /[+\-*/%=<>!&|^~?:]/.test(s[j])) j++;
+      out += ocSyn('operator', s.slice(i, j)); i = j; continue;
+    }
+    if ('(){}[],.;'.includes(s[i])) { out += ocSyn('punct', s[i]); i++; continue; }
+    out += escapeHtml(s[i++]);
+  }
+  return out;
+}
+
+function ocTokenize(code, lang) {
+  const src = String(code || '');
+  if (!src) return '';
+  lang = String(lang || '').toLowerCase().replace(/^language-/, '');
+  if (lang === 'json') return ocTokJson(src);
+  if (lang === 'diff' || lang === 'patch') return ocTokDiff(src);
+  if (lang === 'http') return ocTokHttp(src);
+  if (lang === 'bash' || lang === 'sh' || lang === 'shell' || lang === 'zsh' || lang === 'console') return ocTokBash(src);
+  if (lang === 'python' || lang === 'py' || lang === 'javascript' || lang === 'js' || lang === 'typescript' || lang === 'ts'
+      || lang === 'tsx' || lang === 'jsx' || lang === 'go' || lang === 'rust' || lang === 'rs') {
+    const map = { py: 'python', js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript', rs: 'rust' };
+    return ocTokCode(src, map[lang] || lang);
+  }
+  if (!lang) {
+    const t = src.trim();
+    if ((t.startsWith('{') || t.startsWith('[')) && /[\]}]$/.test(t)) return ocTokJson(src);
+    if (/^(GET|POST|PUT|PATCH|DELETE)\s+\//m.test(src)) return ocTokHttp(src);
+    if (/^[+\-]{3}\s|^@@ /m.test(src)) return ocTokDiff(src);
+  }
+  return ocTokPlain(src);
+}
+
+function ocColorize(el) {
+  if (!el) return;
+  for (const code of el.querySelectorAll('pre code')) {
+    const langMatch = (code.className || '').match(/language-([\w+-]+)/);
+    const lang = langMatch ? langMatch[1] : '';
+    if (lang === 'mermaid') continue;
+    code.innerHTML = ocTokenize(code.textContent || '', lang);
+  }
+  for (const code of el.querySelectorAll('code')) {
+    if (code.closest('pre')) continue;
+    const raw = code.textContent || '';
+    if (OC_PATH_RE.test(raw) || /^(GET|POST|PUT|PATCH|DELETE)\b/.test(raw) || raw.includes('/')) {
+      code.innerHTML = /^(GET|POST|PUT|PATCH|DELETE)\b/.test(raw) ? ocTokHttp(raw) : ocTokPlain(raw);
+    }
+  }
+}
+
 // LaTeX segments must be hidden from markdown (underscores/asterisks inside
 // formulas would become <em>), then restored verbatim for KaTeX auto-render.
 function md(text) {
@@ -321,6 +572,301 @@ function renderBlocks(container, role, blocks, toolMap) {
   }
 }
 
+function ocModelLabel(model, provider) {
+  const m = String(model || '');
+  const p = String(provider || '');
+  let name = m;
+  if (/deepseek-v4-pro/i.test(m)) name = 'DeepSeek V4 Pro';
+  else if (/deepseek-v4-flash/i.test(m)) name = 'DeepSeek V4 Flash';
+  if (/deepseek/i.test(p) && /v4-pro/i.test(m)) name += '（官方）';
+  return name || m || 'OpenCode';
+}
+function ocAgentLabel(agent) {
+  const a = String(agent || 'reverse');
+  return a ? a.charAt(0).toUpperCase() + a.slice(1) : 'Reverse';
+}
+function fmtOcDur(ms) {
+  if (ms == null || !Number.isFinite(+ms) || +ms < 0) return '';
+  return (+ms / 1000).toFixed(1) + 's';
+}
+function fmtTok(n) {
+  const x = Number(n) || 0;
+  if (x >= 1000) return (x / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(x);
+}
+
+function ocThoughtEl(text, durationMs, open) {
+  const det = document.createElement('details');
+  det.className = 'oc-thought';
+  if (open) det.open = true;
+  const sum = document.createElement('summary');
+  const dur = fmtOcDur(durationMs);
+  sum.textContent = dur ? `+ Thought: ${dur}` : '+ Thought';
+  const body = document.createElement('div');
+  body.className = 'oc-thought-body';
+  body.textContent = text || '';
+  det.append(sum, body);
+  return det;
+}
+
+function ocToolEl(b) {
+  const box = document.createElement('div');
+  box.className = 'oc-term' + (b.status === 'error' || b.error ? ' error' : '');
+  const head = document.createElement('div');
+  head.className = 'oc-term-cmd';
+  const cmd = b.command || '';
+  if (b.name === 'bash' || cmd) head.innerHTML = ocTokBash('$ ' + (cmd || b.title || b.name));
+  else head.innerHTML = ocTokPlain((b.name || 'tool') + (b.title && b.title !== b.name ? '  ' + b.title : ''));
+  box.appendChild(head);
+  const out = (typeof b.output === 'string' ? b.output : '') || b.error || '';
+  if (out) {
+    const pre = document.createElement('pre');
+    pre.className = 'oc-term-out';
+    const t = out.trim();
+    const lang = (t.startsWith('{') || t.startsWith('[')) ? 'json'
+      : /^(GET|POST|PUT|PATCH|DELETE)\s+\//m.test(out) ? 'http'
+      : '';
+    pre.innerHTML = ocTokenize(out, lang);
+    box.appendChild(pre);
+  } else if (b.status && b.status !== 'completed') {
+    const st = document.createElement('div');
+    st.className = 'oc-term-st';
+    st.textContent = b.status;
+    box.appendChild(st);
+  }
+  return box;
+}
+
+function ocFooterEl(b) {
+  const line = document.createElement('div');
+  line.className = 'oc-footer';
+  const bits = [ocAgentLabel(b.agent), ocModelLabel(b.model, b.provider)];
+  const dur = fmtOcDur(b.durationMs);
+  if (dur) bits.push(dur);
+  const sq = document.createElement('span');
+  sq.className = 'oc-sq';
+  line.append(sq, document.createTextNode(' ' + bits.join(' · ')));
+  return line;
+}
+
+function renderOcBlocks(container, role, blocks) {
+  if (role === 'user') {
+    const texts = (blocks || []).filter((b) => b.type === 'text').map((b) => b.text).filter(Boolean);
+    if (!texts.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'oc-user';
+    wrap.textContent = texts.join('\n');
+    container.appendChild(wrap);
+    return;
+  }
+  for (const b of blocks || []) {
+    if (b.type === 'oc_thought') container.appendChild(ocThoughtEl(b.text, b.durationMs, false));
+    else if (b.type === 'oc_tool') container.appendChild(ocToolEl(b));
+    else if (b.type === 'text') {
+      const div = document.createElement('div');
+      div.className = 'oc-md';
+      div.innerHTML = md(b.text);
+      typeset(div);
+      ocColorize(div);
+      container.appendChild(div);
+    } else if (b.type === 'oc_footer') container.appendChild(ocFooterEl(b));
+    else if (b.type === 'oc_note') {
+      const n = document.createElement('div');
+      n.className = 'oc-note';
+      n.textContent = b.text;
+      container.appendChild(n);
+    }
+  }
+}
+
+function paintOcPart(el, part) {
+  el.innerHTML = '';
+  if (!part) return;
+  if (part.type === 'reasoning') {
+    const tm = part.time || {};
+    const dur = tm.end && tm.start ? tm.end - tm.start : (tm.start ? Date.now() - tm.start : null);
+    el.appendChild(ocThoughtEl(part.text || '', dur, !tm.end));
+  } else if (part.type === 'tool') {
+    const st = part.state || {};
+    const inp = st.input && typeof st.input === 'object' ? st.input : {};
+    el.appendChild(ocToolEl({
+      name: part.tool, title: st.title, command: inp.command || inp.cmd || '',
+      output: typeof st.output === 'string' ? st.output : '',
+      status: st.status, error: typeof st.error === 'string' ? st.error : '',
+    }));
+  } else if (part.type === 'text') {
+    const div = document.createElement('div');
+    div.className = 'oc-md';
+    div.innerHTML = md(part.text || '');
+    typeset(div);
+    ocColorize(div);
+    el.appendChild(div);
+  }
+}
+
+function ocPartEl(v, part, spinner) {
+  if (!part?.id) return;
+  if (!v.ocMap) v.ocMap = new Map();
+  if (!v.ocParts) v.ocParts = new Map();
+  v.ocParts.set(part.id, part);
+  let el = v.ocMap.get(part.id);
+  if (!el) {
+    el = document.createElement('div');
+    el.dataset.ocPart = part.id;
+    v.ocMap.set(part.id, el);
+    const host = spinner || v.spinner;
+    if (host && host.parentNode === v.el) v.el.insertBefore(el, host);
+    else v.el.appendChild(el);
+  }
+  paintOcPart(el, part);
+  return el;
+}
+
+const OC_WINDOW = 128000;
+
+function applyOcMeta(v, data) {
+  if (!v) return;
+  const prev = v.ocMeta || {};
+  let tokens = prev.tokens || 0;
+  if (data.tokens != null) tokens = data.tokens;
+  else if (data.tokensInput != null || data.tokensOutput != null) {
+    tokens = (data.tokensInput || 0) + (data.tokensOutput || 0);
+  }
+  v.ocMeta = {
+    ...prev,
+    title: data.title || prev.title || v.title || '',
+    cost: data.cost != null ? data.cost : (prev.cost || 0),
+    tokens,
+    agent: data.agent || prev.agent || v.agent || 'reverse',
+    model: data.model || prev.model || '',
+    provider: data.provider || prev.provider || '',
+    version: data.version || prev.version || '',
+    cwd: data.cwd || prev.cwd || v.cwd || '',
+    todos: data.todos || prev.todos || [],
+    mcp: data.mcp || prev.mcp || {},
+  };
+  v.agent = v.ocMeta.agent;
+  if (v.ocMeta.title) v.title = v.ocMeta.title;
+  renderOcChrome(v);
+}
+
+function mcpStatusOf(entry) {
+  if (!entry) return 'unknown';
+  if (typeof entry === 'string') return entry;
+  return entry.status || 'unknown';
+}
+
+function renderOcMcp(mcp) {
+  const root = $('#oc-rail-mcp');
+  if (!root) return;
+  root.innerHTML = '';
+  const names = Object.keys(mcp || {});
+  if (!names.length) {
+    root.innerHTML = '<div class="oc-empty">未连接</div>';
+    return;
+  }
+  for (const name of names.sort()) {
+    const st = mcpStatusOf(mcp[name]);
+    const on = st === 'connected';
+    const row = document.createElement('div');
+    row.className = 'oc-mcp-row';
+    const dot = document.createElement('span');
+    dot.className = 'oc-mcp-dot' + (on ? ' on' : '');
+    const lab = document.createElement('span');
+    lab.textContent = name;
+    const tag = document.createElement('span');
+    tag.className = 'oc-mcp-st' + (on ? ' on' : '');
+    tag.textContent = on ? 'Connected' : (st === 'disabled' ? 'Disabled' : st);
+    row.append(dot, lab, tag);
+    root.appendChild(row);
+  }
+}
+
+function renderOcTodo(todos) {
+  const root = $('#oc-rail-todo');
+  if (!root) return;
+  root.innerHTML = '';
+  const list = Array.isArray(todos) ? todos : [];
+  if (!list.length) {
+    root.innerHTML = '<div class="oc-empty">无</div>';
+    return;
+  }
+  for (const t of list) {
+    const row = document.createElement('div');
+    const st = t.status || 'pending';
+    row.className = 'oc-todo-row' + (st === 'completed' || st === 'cancelled' ? ' done' : st === 'in_progress' ? ' doing' : '');
+    const mark = document.createElement('span');
+    mark.className = 'oc-todo-mark';
+    mark.textContent = st === 'completed' ? '✓' : st === 'in_progress' ? '▸' : '○';
+    const lab = document.createElement('span');
+    lab.textContent = t.content || '';
+    row.append(mark, lab);
+    root.appendChild(row);
+  }
+}
+
+function renderOcChrome(v) {
+  if (!isOcTui(v) || currentChatKey !== v.key) return;
+  const m = v.ocMeta || {};
+  const used = m.tokens || 0;
+  const pct = Math.min(99, Math.round((used / OC_WINDOW) * 100));
+  const titleEl = $('#oc-rail-title');
+  if (titleEl) titleEl.textContent = m.title || v.title || '';
+  const ctx = $('#oc-rail-ctx');
+  if (ctx) {
+    ctx.innerHTML = `<div class="oc-tok">${used.toLocaleString()} tokens</div>
+      <div class="oc-pct"><span class="oc-bar-track"><span style="width:${pct}%"></span></span> ${pct}% used</div>
+      <div class="oc-cost">$${(m.cost || 0).toFixed(2)} spent</div>`;
+  }
+  renderOcMcp(m.mcp);
+  renderOcTodo(m.todos);
+  const bar = $('#oc-bar');
+  if (bar) {
+    bar.innerHTML = `<span class="oc-bar-cwd">${escapeHtml(m.cwd || v.cwd || '')}</span>
+      <span class="oc-bar-mid">${escapeHtml(ocAgentLabel(m.agent))} · ${escapeHtml(ocModelLabel(m.model, m.provider))}</span>
+      <span class="oc-bar-use">${fmtTok(used)} (${pct}%) $${(m.cost || 0).toFixed(2)}</span>
+      <span class="oc-bar-ver"><span class="oc-dot"></span> OpenCode ${escapeHtml(m.version || '')}</span>`;
+  }
+}
+
+function setOcMode(on) {
+  $('#chat-view').classList.toggle('oc-mode', !!on);
+  const rail = $('#oc-rail');
+  const bar = $('#oc-bar');
+  if (rail) rail.hidden = !on;
+  if (bar) bar.hidden = !on;
+}
+
+function refreshOcMcp(v) {
+  if (v?.engine !== 'opencode') return;
+  fetch('/api/opencode/mcp').then((r) => r.json()).then((mcp) => {
+    if (!v.ocMeta) v.ocMeta = {};
+    v.ocMeta.mcp = mcp || {};
+    renderOcChrome(v);
+  }).catch(() => {});
+}
+
+function applyOcSessionInfo(v, info) {
+  if (!info) return;
+  const tokens = info.tokens
+    ? (info.tokens.input || 0) + (info.tokens.output || 0)
+    : undefined;
+  applyOcMeta(v, {
+    title: info.title,
+    cost: info.cost,
+    tokens,
+    agent: info.agent,
+    model: info.model?.id || info.modelID,
+    provider: info.model?.providerID || info.providerID,
+    version: info.version,
+    cwd: info.directory,
+  });
+  if (info.title && currentChatKey === v.key) {
+    $('#chat-title').textContent = info.title;
+    $('#mobile-title').textContent = info.title;
+  }
+}
+
 function expandIndexedText(text) {
   const src = String(text || '');
   const images = [];
@@ -402,6 +948,8 @@ function showChatView(key) {
   $('#mobile-title').textContent = v.title || '新会话';
   const eng = engineName(v.engine);
   $('#chat-sub').textContent = `${eng}${v.cwd ? '  ·  ' + v.cwd : ''}${v.id ? '  ·  ' + v.id : ''}`;
+  setOcMode(isOcTui(v));
+  if (isOcTui(v)) renderOcChrome(v);
   switchView('chat');
   updateComposer(v);
   messagesRoot.scrollTop = messagesRoot.scrollHeight;
@@ -410,20 +958,23 @@ function showChatView(key) {
 function updateComposer(v) {
   const isCursor = v?.engine === 'cursor';
   const isHermes = v?.engine === 'hermes';
+  const isOc = isOcTui(v);
   syncModelSelector(v?.engine || 'claude');
   $('#btn-send').textContent = v.running ? '排队' : '发送';
   $('#btn-stop').hidden = !v.running;
   $('#input').placeholder = v.running
     ? '当前轮运行中——输入后 Enter 排队，本轮结束自动发送'
-    : isHermes
-      ? '输入发给 Hermes Agent，Enter 发送'
-      : (isCursor
-        ? '输入发给 Cursor Agent，Enter 发送 · 可粘贴/拖入图片和文件'
-        : '输入消息，Enter 发送，Shift+Enter 换行');
-  $('#btn-attach').hidden = isHermes;
+    : isOc
+      ? '/~ 发给 Reverse Agent，Enter 发送'
+      : isHermes
+        ? '输入发给 Hermes Agent，Enter 发送'
+        : (isCursor
+          ? '输入发给 Cursor Agent，Enter 发送 · 可粘贴/拖入图片和文件'
+          : '输入消息，Enter 发送，Shift+Enter 换行');
+  $('#btn-attach').hidden = isHermes || isOc;
   $('#btn-attach').title = isCursor ? '添加图片或文件（落盘后按路径发给 Agent）' : '添加图片';
   $('#file-input').accept = isCursor ? '' : 'image/*';
-  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor || isHermes);
+  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor || isHermes || isOc);
 }
 
 function enqueue(v, text, atts = [], model = null) {
@@ -495,9 +1046,30 @@ function restoreQueueToInput(v) {
   }
 }
 
+function isOcTui(v) {
+  return v?.engine === 'opencode' && String(v.agent || 'reverse').startsWith('reverse');
+}
+
+function ocBlocksToStd(blocks) {
+  const out = [];
+  for (const b of blocks || []) {
+    if (b.type === 'oc_thought') out.push({ type: 'thinking', text: b.text });
+    else if (b.type === 'oc_tool') {
+      out.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input || { command: b.command } });
+      if (b.output || b.error) out.push({ type: 'tool_result', tool_use_id: b.id, text: b.output || b.error, is_error: !!b.error });
+    } else if (b.type === 'text') out.push(b);
+  }
+  return out;
+}
+
 function renderPage(v, messages) {
   const page = document.createElement('div');
-  for (const m of messages) renderBlocks(page, m.role, m.blocks, v.toolMap);
+  if (isOcTui(v)) page.className = 'oc-stream';
+  for (const m of messages) {
+    if (isOcTui(v)) renderOcBlocks(page, m.role, m.blocks);
+    else if (v.engine === 'opencode') renderBlocks(page, m.role, ocBlocksToStd(m.blocks), v.toolMap);
+    else renderBlocks(page, m.role, m.blocks, v.toolMap);
+  }
   return page;
 }
 
@@ -530,7 +1102,7 @@ async function openSession(slug, id) {
   if (data.error) { alert('读取会话失败: ' + data.error); return; }
   const proj = projectsCache.find(p => p.slug === slug);
   const engine = data.engine || proj?.engine || 'claude';
-  const v = getOrCreateChatView(key, { slug, id, cwd: data.cwd, title: data.title || '(无标题)', engine });
+  const v = getOrCreateChatView(key, { slug, id, cwd: data.cwd, title: data.title || '(无标题)', engine, agent: data.agent });
   v.id0 = id;                 // original file id, used for history paging even after resume forks
   v.renamed = !!data.renamed;
   v.autoTitle = data.autoTitle || '';
@@ -543,6 +1115,10 @@ async function openSession(slug, id) {
   v.el.appendChild(v.pager);
   updatePager(v);
   v.el.appendChild(renderPage(v, data.messages));
+  if (engine === 'opencode') {
+    applyOcMeta(v, data);
+    refreshOcMcp(v);
+  }
   showChatView(key);
   markActiveSession(id);
   adoptLiveTurn(v);
@@ -586,6 +1162,13 @@ async function syncSession(v) {
     if (v.total == null) { v.total = data.total; return; }
     if (data.total <= v.total) return;
 
+    if (v.engine === 'opencode' && v.ocDidStream) {
+      v.total = data.total;
+      v.ocDidStream = false;
+      applyOcMeta(v, data);
+      return;
+    }
+
     const added = data.total - v.total;
     let fresh = data.messages.slice(Math.max(0, data.messages.length - added));
     // dispatch() already painted the local user bubble; a stale watermark
@@ -627,9 +1210,14 @@ async function adoptLiveTurn(v) {
 
 function newChat(cwd, engine = 'claude') {
   const key = 'new-' + (++chSeq);
+  const titles = {
+    cursor: '新 Cursor 会话', hermes: '新 Hermes 会话',
+    opencode: '新 OpenCode 会话',
+  };
   getOrCreateChatView(key, {
     slug: null, id: null, cwd: cwd || '', engine,
-    title: engine === 'cursor' ? '新 Cursor 会话' : engine === 'hermes' ? '新 Hermes 会话' : '新 Claude 会话',
+    title: titles[engine] || '新 Claude 会话',
+    agent: engine === 'opencode' ? 'reverse' : undefined,
   });
   showChatView(key);
   markActiveSession(null);
@@ -637,12 +1225,13 @@ function newChat(cwd, engine = 'claude') {
 }
 
 function engineName(engine) {
-  return engine === 'cursor' ? 'Cursor' : engine === 'hermes' ? 'Hermes' : 'Claude';
+  return engine === 'cursor' ? 'Cursor' : engine === 'hermes' ? 'Hermes' : engine === 'opencode' ? 'OpenCode' : 'Claude';
 }
 function engineBadge(engine) {
-  return engine === 'cursor' ? 'CR' : engine === 'hermes' ? 'HM' : 'CC';
+  return engine === 'cursor' ? 'CR' : engine === 'hermes' ? 'HM' : engine === 'opencode' ? 'OC' : 'CC';
 }
 function engineLabel(v) {
+  if (v?.engine === 'opencode') return v.agent || 'reverse';
   return v?.engine === 'cursor' ? 'agent' : v?.engine === 'hermes' ? 'hermes' : 'claude';
 }
 
@@ -927,7 +1516,8 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
     ? { type: 'file', name: a.name }
     : { type: 'image', url: a.url, mediaType: a.mediaType, data: a.data });
   if (text) blocks.push({ type: 'text', text });
-  renderBlocks(v.el, 'user', blocks, v.toolMap);
+  if (isOcTui(v)) renderOcBlocks(v.el, 'user', blocks);
+  else renderBlocks(v.el, 'user', blocks, v.toolMap);
   armLocalTurn(v);
   if (oneShotModel) {
     const tag = document.createElement('div');
@@ -935,7 +1525,7 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
     tag.textContent = `本轮使用 ${oneShotModel}`;
     v.el.appendChild(tag);
   }
-  if (v.engine !== 'cursor') warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
+  if (v.engine !== 'cursor' && v.engine !== 'opencode') warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
   const ch = 'c' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
   const payloadAtts = v.engine === 'cursor'
     ? atts.map(a => ({ name: a.name, mediaType: a.mediaType, data: a.data }))
@@ -945,6 +1535,7 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
              prompt: text || '',
              attachments: payloadAtts,
              permissionMode: $('#perm-mode').value,
+             agent: v.engine === 'opencode' ? (v.agent || 'reverse') : undefined,
              ...resolveModelChoice(oneShotModel || $('#model-sel').value, v.engine) },
   });
 }
@@ -990,6 +1581,27 @@ function attachChat(v, ch, { start, fresh } = {}) {
         v.runningModel = e.model || engineLabel(v);
         liveState(v).startedAt = Date.now();
         spinnerLabel(v, spinner);
+      } else if (e.type === 'oc.part' && e.part) {
+        v.ocDidStream = true;
+        liveState(v).tool = e.part.type === 'tool' ? (e.part.tool || 'tool') : null;
+        ocPartEl(v, e.part, spinner);
+        spinnerLabel(v, spinner);
+      } else if (e.type === 'oc.delta') {
+        v.ocDidStream = true;
+        const part = (v.ocParts && v.ocParts.get(e.partID)) || { id: e.partID, type: 'text', text: '' };
+        if (e.field === 'text' || !e.field) part.text = (part.text || '') + (e.delta || '');
+        ocPartEl(v, part, spinner);
+      } else if (e.type === 'oc.session') {
+        applyOcSessionInfo(v, e.info);
+        if (e.info?.id) v.id = e.info.id;
+      } else if (e.type === 'oc.todo') {
+        if (!v.ocMeta) v.ocMeta = {};
+        v.ocMeta.todos = e.todos || [];
+        renderOcChrome(v);
+      } else if (e.type === 'oc.mcp') {
+        if (!v.ocMeta) v.ocMeta = {};
+        v.ocMeta.mcp = e.mcp || {};
+        renderOcChrome(v);
       } else if (e.type === 'thinking' && e.subtype === 'delta' && e.text) {
         handleStreamEvent(v, spinner, { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: e.text } });
       } else if (e.type === 'stream_event') {
@@ -1005,9 +1617,12 @@ function attachChat(v, ch, { start, fresh } = {}) {
           v.el.insertBefore(blockGroup(v, 'user', blocks), spinner);
         }
       } else if (e.type === 'assistant') {
-        clearLiveBody(v);
-        const blocks = normalizeStreamContent(e.message?.content);
-        v.el.insertBefore(blockGroup(v, 'assistant', blocks), spinner);
+        if (isOcTui(v)) { /* live parts already painted */ }
+        else {
+          clearLiveBody(v);
+          const blocks = normalizeStreamContent(e.message?.content);
+          v.el.insertBefore(blockGroup(v, 'assistant', blocks), spinner);
+        }
       } else if (e.type === 'result') {
         if (e.session_id) {
           v.id = e.session_id;
@@ -1016,20 +1631,37 @@ function attachChat(v, ch, { start, fresh } = {}) {
             $('#chat-sub').textContent = `${eng}${v.cwd ? '  ·  ' + v.cwd : ''}  ·  ${v.id}`;
           }
         }
-        const line = document.createElement('div');
-        line.className = 'result-line';
-        const cost = e.total_cost_usd != null ? ` · $${e.total_cost_usd.toFixed(4)}` : '';
-        const dur = e.duration_ms != null ? ` · ${(e.duration_ms / 1000).toFixed(1)}s` : '';
-        const u = e.usage || {};
-        const tok = u.output_tokens != null
-          ? ` · 出${u.output_tokens.toLocaleString()}/入${(u.input_tokens || 0).toLocaleString()} tok` : '';
-        line.textContent = (e.subtype === 'success' ? '完成' : '结束: ' + e.subtype) + dur + tok + cost;
-        v.el.insertBefore(line, spinner);
-        if (e.is_error && e.result) {
-          const err = document.createElement('div');
-          err.className = 'error-line';
-          err.textContent = explainError(e.result);
-          v.el.insertBefore(err, spinner);
+        if (isOcTui(v)) {
+          if (v.ocDidStream) {
+            v.el.insertBefore(ocFooterEl({
+              agent: v.agent || 'reverse',
+              model: (v.ocMeta && v.ocMeta.model) || v.runningModel,
+              provider: v.ocMeta && v.ocMeta.provider,
+              durationMs: e.duration_ms,
+            }), spinner);
+          }
+          if (e.is_error && e.result) {
+            const err = document.createElement('div');
+            err.className = 'error-line';
+            err.textContent = explainError(e.result);
+            v.el.insertBefore(err, spinner);
+          }
+        } else {
+          const line = document.createElement('div');
+          line.className = 'result-line';
+          const cost = e.total_cost_usd != null ? ` · $${e.total_cost_usd.toFixed(4)}` : '';
+          const dur = e.duration_ms != null ? ` · ${(e.duration_ms / 1000).toFixed(1)}s` : '';
+          const u = e.usage || {};
+          const tok = u.output_tokens != null
+            ? ` · 出${u.output_tokens.toLocaleString()}/入${(u.input_tokens || 0).toLocaleString()} tok` : '';
+          line.textContent = (e.subtype === 'success' ? '完成' : '结束: ' + e.subtype) + dur + tok + cost;
+          v.el.insertBefore(line, spinner);
+          if (e.is_error && e.result) {
+            const err = document.createElement('div');
+            err.className = 'error-line';
+            err.textContent = explainError(e.result);
+            v.el.insertBefore(err, spinner);
+          }
         }
       }
     } else if (m.op === 'chat.error') {
@@ -1137,8 +1769,9 @@ function modelChoices() {
   const fromSel = [...$('#model-sel').querySelectorAll('option')]
     .filter(o => o.value && o.value !== '__custom__' && !o.hidden)
     .map(o => ({ name: o.value, desc: o.textContent }));
-  const provAliases = eng === 'cursor' ? [] : providers.map(p => ({ name: 'provider:' + p.id, desc: p.label, alias: p.id }));
-  const aliases = eng === 'cursor' ? [] : MODEL_ALIASES;
+  const skipExtras = eng === 'cursor' || eng === 'hermes' || eng === 'opencode';
+  const provAliases = skipExtras ? [] : providers.map(p => ({ name: 'provider:' + p.id, desc: p.label, alias: p.id }));
+  const aliases = skipExtras ? [] : MODEL_ALIASES;
   const seen = new Set(fromSel.map(m => m.name));
   return [...fromSel, ...provAliases.filter(p => !seen.has(p.name)), ...aliases.filter(m => !seen.has(m.name))];
 }
@@ -1210,13 +1843,13 @@ $('#input').addEventListener('keydown', (e) => {
 $('#perm-mode').addEventListener('change', () => localStorage.setItem('permMode', $('#perm-mode').value));
 if (localStorage.getItem('permMode')) $('#perm-mode').value = localStorage.getItem('permMode');
 function modelStorageKey(engine) {
-  return 'model:' + (engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : 'claude');
+  return 'model:' + (engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : engine === 'opencode' ? 'opencode' : 'claude');
 }
 
 function syncModelSelector(engine) {
-  const eng = engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : 'claude';
+  const eng = engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : engine === 'opencode' ? 'opencode' : 'claude';
   const sel = $('#model-sel');
-  for (const el of sel.querySelectorAll('.model-claude, .model-cursor, .model-hermes')) {
+  for (const el of sel.querySelectorAll('.model-claude, .model-cursor, .model-hermes, .model-opencode')) {
     el.hidden = !el.classList.contains('model-' + eng);
   }
   for (const opt of sel.querySelectorAll('option[data-engine]')) {
@@ -1226,6 +1859,7 @@ function syncModelSelector(engine) {
   if (!saved && eng === 'claude') saved = localStorage.getItem('model'); // migrate legacy key
   const pick = (v) => v && [...sel.options].some(o => o.value === v && !o.hidden);
   if (pick(saved)) sel.value = saved;
+  else if (eng === 'opencode' && pick('deepseek/deepseek-v4-pro')) sel.value = 'deepseek/deepseek-v4-pro';
   else if (!pick(sel.value) || sel.value.startsWith('provider:')) sel.value = '';
 }
 
@@ -1237,7 +1871,7 @@ function addModelOption(id, label, engine) {
   const opt = document.createElement('option');
   opt.value = id;
   opt.textContent = label || id;
-  opt.dataset.engine = eng === 'cursor' ? 'cursor' : eng === 'hermes' ? 'hermes' : 'claude';
+  opt.dataset.engine = eng === 'cursor' ? 'cursor' : eng === 'hermes' ? 'hermes' : eng === 'opencode' ? 'opencode' : 'claude';
   sel.insertBefore(opt, sel.querySelector('option[value="__custom__"]'));
 }
 
@@ -1268,7 +1902,7 @@ loadProviders();
 // split dropdown value into what chat.start needs; providers never apply to Cursor
 function resolveModelChoice(value, engine) {
   if (!value) return {};
-  if (engine === 'cursor' || engine === 'hermes') {
+  if (engine === 'cursor' || engine === 'hermes' || engine === 'opencode') {
     if (value.startsWith('provider:')) return {};
     return { model: value };
   }
@@ -1332,6 +1966,10 @@ messagesRoot.addEventListener('scroll', updateJumpBtn);
 // ---------------- sidebar: sessions ----------------
 let projectsCache = [];
 let activeState = { working: new Set(), idle: new Set() };
+let contentHits = new Map();
+let searchGen = 0;
+let searchTimer = 0;
+let searchPending = false;
 
 async function loadProjects() {
   const res = await fetch('/api/projects');
@@ -1471,6 +2109,15 @@ function makeSessionItem(p, s) {
   meta.className = 'sess-meta';
   meta.textContent = `${new Date(s.mtimeMs).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${s.msgCount == null ? '长会话' : s.msgCount + ' 条'}`;
 
+  const hit = contentHits.get(s.id);
+  let snip = null;
+  if (hit?.snippet) {
+    snip = document.createElement('div');
+    snip.className = 'sess-snip';
+    snip.textContent = hit.snippet;
+    snip.title = hit.snippet;
+  }
+
   const pin = document.createElement('button');
   pin.className = 'pin-btn';
   pin.innerHTML = PIN_SVG;
@@ -1487,16 +2134,60 @@ function makeSessionItem(p, s) {
   const body = document.createElement('div');
   body.className = 'sess-body';
   body.append(t, meta);
+  if (snip) body.append(snip);
   item.append(chip, body, ren, pin);
   item.addEventListener('click', () => openSession(p.slug, s.id));
   return item;
 }
 
+function scheduleContentSearch() {
+  const q = $('#filter').value.trim();
+  clearTimeout(searchTimer);
+  if (!q) {
+    searchGen++;
+    searchPending = false;
+    if (contentHits.size) {
+      contentHits = new Map();
+      renderSessionList();
+    }
+    return;
+  }
+  const ql = q.toLowerCase();
+  for (const [id, h] of [...contentHits]) {
+    if (!(h.snippet || '').toLowerCase().includes(ql)) contentHits.delete(id);
+  }
+  const gen = ++searchGen;
+  searchPending = true;
+  searchTimer = setTimeout(async () => {
+    try {
+      const data = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+      if (gen !== searchGen) return;
+      const next = new Map();
+      for (const h of data.hits || []) {
+        if (h?.id) next.set(h.id, h);
+      }
+      contentHits = next;
+    } catch {
+      if (gen !== searchGen) return;
+    } finally {
+      if (gen === searchGen) searchPending = false;
+      if (gen === searchGen) renderSessionList();
+    }
+  }, 280);
+}
+
 function renderSessionList() {
-  const q = $('#filter').value.trim().toLowerCase();
+  const raw = $('#filter').value.trim();
+  const q = raw.toLowerCase();
   const root = $('#session-list');
   root.innerHTML = '';
-  const match = (s) => !q || s.title.toLowerCase().includes(q);
+  const match = (s) => {
+    if (!q) return true;
+    return (s.title || '').toLowerCase().includes(q)
+      || (s.id || '').toLowerCase().includes(q)
+      || (s.cwd || '').toLowerCase().includes(q)
+      || contentHits.has(s.id);
+  };
 
   // pinned first, in pin order; a pinned session is not repeated in its project group
   const pinned = [];
@@ -1525,12 +2216,18 @@ function renderSessionList() {
     g.className = 'proj-group';
     const name = document.createElement('div');
     name.className = 'proj-name';
-    const prefix = p.engine === 'cursor' ? 'Cursor · ' : p.engine === 'hermes' ? '' : '';
+    const prefix = p.engine === 'cursor' ? 'Cursor · ' : p.engine === 'hermes' ? '' : p.engine === 'opencode' ? '' : '';
     name.textContent = prefix + (p.cwd || p.slug);
     name.title = p.cwd || p.slug;
     g.appendChild(name);
     for (const s of sessions) g.appendChild(makeSessionItem(p, s));
     root.appendChild(g);
+  }
+  if (!root.children.length && q) {
+    const empty = document.createElement('div');
+    empty.className = 'side-empty';
+    empty.textContent = searchPending ? `正在检索「${raw}」…` : `没有匹配「${raw}」`;
+    root.appendChild(empty);
   }
   applyActiveDots();
 }
@@ -1541,7 +2238,10 @@ function markActiveSession(id) {
   document.querySelectorAll('.term-item').forEach(el => el.classList.remove('active'));
 }
 
-$('#filter').addEventListener('input', renderSessionList);
+$('#filter').addEventListener('input', () => {
+  renderSessionList();
+  scheduleContentSearch();
+});
 $('#btn-refresh').addEventListener('click', () => { loadProjects(); loadGraphMeta(); });
 loadPins().then(loadProjects).then(() => {
   loadGraphMeta();
@@ -1925,6 +2625,9 @@ $('#btn-new-chat').addEventListener('click', () => openNewChatDialog('claude'));
 $('#btn-new-cursor').addEventListener('click', () => openNewChatDialog('cursor'));
 $('#btn-new-hermes')?.addEventListener('click', () => {
   newChat('', 'hermes');
+});
+$('#btn-new-opencode')?.addEventListener('click', () => {
+  newChat('', 'opencode');
 });
 $('#newchat-dialog').addEventListener('close', () => {
   if ($('#newchat-dialog').returnValue === 'ok') {
