@@ -3,15 +3,31 @@
 
   function showSetup(on) {
     const idle = $('#welcome-idle');
+    const intro = $('#intro-panel');
     const panel = $('#setup-panel');
-    if (!idle || !panel) return;
-    idle.hidden = on;
-    panel.hidden = !on;
+    if (!panel) return;
     if (on) {
-      location.hash = 'setup';
+      ['chat-view', 'term-view', 'running-view', 'graph-view'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.hidden = true;
+      });
+      const w = $('#welcome');
+      if (w) {
+        w.hidden = false;
+        w.classList.add('welcome-doc');
+      }
+      if (idle) idle.hidden = true;
+      if (intro) intro.hidden = true;
+      panel.hidden = false;
+      if (location.hash !== '#setup') location.hash = 'setup';
       refresh();
-    } else if (location.hash === '#setup') {
-      history.replaceState(null, '', location.pathname + location.search);
+    } else if (window.cockpitShowHome) {
+      window.cockpitShowHome();
+    } else {
+      if (idle) idle.hidden = false;
+      if (intro) intro.hidden = true;
+      panel.hidden = true;
+      $('#welcome')?.classList.remove('welcome-doc');
     }
   }
 
@@ -83,6 +99,8 @@
     if (binOk && oc.hasKey) {
       $('#setup-go-msg').textContent = '可以开聊了。点按钮会拉起 opencode serve，并新建一条 reverse 会话。';
     }
+    const cta = $('#welcome-setup-cta');
+    if (cta) cta.hidden = !!st.ready;
     return st;
   }
 
@@ -99,7 +117,9 @@
 
   $('#btn-setup')?.addEventListener('click', () => showSetup(true));
   $('#btn-open-setup')?.addEventListener('click', () => showSetup(true));
+  $('#btn-welcome-setup')?.addEventListener('click', () => showSetup(true));
   $('#setup-skip')?.addEventListener('click', () => showSetup(false));
+  $('#setup-to-intro')?.addEventListener('click', () => window.cockpitShowIntro?.());
 
   $('#setup-provider')?.addEventListener('change', () => {
     $('#setup-base-wrap').hidden = $('#setup-provider').value !== 'custom';
@@ -157,17 +177,23 @@
     }
   });
 
-  async function boot() {
-    let st = null;
-    try {
-      const res = await fetch('/api/setup/status');
-      if (res.ok) st = await res.json();
-    } catch { /* 鉴权口会 403，忽略 */ }
-    const want = location.hash === '#setup' || (st && st.ready === false);
-    if (want) showSetup(true);
-    else if (st) {
-      /* keep idle welcome */
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#setup') showSetup(true);
+    else if (location.hash === '#about') window.cockpitShowIntro?.();
+    else {
+      const busy = ['chat-view', 'term-view', 'running-view', 'graph-view']
+        .some((id) => {
+          const el = document.getElementById(id);
+          return el && !el.hidden;
+        });
+      if (!busy) window.cockpitShowHome?.();
     }
+  });
+
+  async function boot() {
+    try { await refresh(); } catch { /* 鉴权口会 403，忽略 */ }
+    if (location.hash === '#setup') showSetup(true);
+    else if (location.hash === '#about') window.cockpitShowIntro?.();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

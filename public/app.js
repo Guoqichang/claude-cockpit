@@ -1586,6 +1586,21 @@ function attachChat(v, ch, { start, fresh } = {}) {
         liveState(v).tool = e.part.type === 'tool' ? (e.part.tool || 'tool') : null;
         ocPartEl(v, e.part, spinner);
         spinnerLabel(v, spinner);
+      } else if (e.type === 'oc.permission' || e.type === 'oc.question') {
+        const note = document.createElement('div');
+        note.className = 'model-tag';
+        if (e.error) note.textContent = `权限回复失败：${e.error}`;
+        else if (e.type === 'oc.question') note.textContent = 'OpenCode 提问已自动跳过（无头模式）';
+        else {
+          const name = e.permission || 'permission';
+          note.textContent = e.reply === 'reject'
+            ? `已拒绝 ${name}`
+            : `已自动放行 ${name}`;
+        }
+        const host = spinner || v.spinner;
+        if (host && host.parentNode === v.el) v.el.insertBefore(note, host);
+        else v.el.appendChild(note);
+        spinnerLabel(v, spinner);
       } else if (e.type === 'oc.delta') {
         v.ocDidStream = true;
         const part = (v.ocParts && v.ocParts.get(e.partID)) || { id: e.partID, type: 'text', text: '' };
@@ -1761,7 +1776,7 @@ const MODEL_ALIASES = [
   { name: 'opus', desc: '别名 · 最强，贵' },
   { name: 'sonnet', desc: '别名 · 均衡' },
   { name: 'haiku', desc: '别名 · 最快最省' },
-  { name: 'fable', desc: '别名' },
+  { name: 'fable', desc: '别名 · Fable 5.1' },
 ];
 
 function modelChoices() {
@@ -1931,7 +1946,7 @@ $('#model-sel').addEventListener('change', () => {
   if (sel.value === '__custom__') {
     const hint = eng === 'cursor'
       ? 'Cursor 模型 ID（如 composer-2.5 / claude-opus-5-thinking-high）:'
-      : '模型 ID 或别名（如 claude-opus-5 / opus / fable）:';
+      : '模型 ID 或别名（如 claude-fable-5-1 / opus / fable）:';
     const id = (prompt(hint, '') || '').trim();
     if (!id) { sel.value = localStorage.getItem(key) || localStorage.getItem('model') || ''; return; }
     addModelOption(id, null, eng);
@@ -2070,7 +2085,16 @@ window.applyGraphMeta = (nodes) => {
     if (!old || old.color !== n.color || old.icon !== n.icon) changed = true;
   }
   graphMeta = m;
-  if (changed) renderSessionList();
+  if (!changed) return;
+  const items = document.querySelectorAll('.sess-item');
+  if (!items.length) { renderSessionList(); return; }
+  for (const el of items) {
+    const gm = graphMeta.get(el.dataset.sessId);
+    if (!gm) continue;
+    el.style.setProperty('--sess-color', gm.color);
+    const chip = el.querySelector('.sess-chip');
+    if (chip && window.CockpitIcons) chip.innerHTML = CockpitIcons.html(gm.icon, 18, gm.color);
+  }
 };
 
 async function loadGraphMeta() {
@@ -2100,9 +2124,12 @@ function makeSessionItem(p, s) {
   const eng = s.engine || p.engine || 'claude';
   badge.className = 'engine-badge ' + eng;
   badge.textContent = engineBadge(eng);
+  const titleText = document.createElement('span');
+  titleText.className = 'sess-name';
+  titleText.textContent = s.title;
   t.appendChild(dot);
   t.appendChild(badge);
-  t.appendChild(document.createTextNode(s.title));
+  t.appendChild(titleText);
   t.title = s.title;
 
   const meta = document.createElement('div');
@@ -2140,8 +2167,19 @@ function makeSessionItem(p, s) {
   return item;
 }
 
+function filterValue() {
+  return ($('#filter')?.value || '').trim();
+}
+
+function setFilterPlaceholder(text) {
+  const inp = $('#filter');
+  const proxy = $('#filter-proxy');
+  if (inp) inp.placeholder = text;
+  if (proxy) proxy.textContent = text;
+}
+
 function scheduleContentSearch() {
-  const q = $('#filter').value.trim();
+  const q = filterValue();
   clearTimeout(searchTimer);
   if (!q) {
     searchGen++;
@@ -2176,10 +2214,29 @@ function scheduleContentSearch() {
   }, 280);
 }
 
+function prettyGroupLabel(p) {
+  const engine = p.engine || 'claude';
+  const raw = String(p.cwd || p.slug || '');
+  if (engine === 'opencode' || engine === 'hermes') return raw;
+  let label = raw
+    .replace(/^\/Users\/[^/]+/, '~')
+    .replace(/^\/home\/[^/]+/, '~')
+    .replace(/^\/root(?=\/|$)/, '~');
+  if (label.startsWith('/private/tmp/') || label.startsWith('/tmp/')) {
+    const base = label.split('/').filter(Boolean).pop() || 'tmp';
+    label = '临时 / ' + base;
+  } else if (label === '~' || label === '/') {
+    label = '主目录';
+  }
+  if (engine === 'cursor') return 'Cursor · ' + label;
+  return label;
+}
+
 function renderSessionList() {
-  const raw = $('#filter').value.trim();
+  const raw = filterValue();
   const q = raw.toLowerCase();
   const root = $('#session-list');
+  const keepScroll = root.scrollTop;
   root.innerHTML = '';
   const match = (s) => {
     if (!q) return true;
@@ -2216,8 +2273,7 @@ function renderSessionList() {
     g.className = 'proj-group';
     const name = document.createElement('div');
     name.className = 'proj-name';
-    const prefix = p.engine === 'cursor' ? 'Cursor · ' : p.engine === 'hermes' ? '' : p.engine === 'opencode' ? '' : '';
-    name.textContent = prefix + (p.cwd || p.slug);
+    name.textContent = prettyGroupLabel(p);
     name.title = p.cwd || p.slug;
     g.appendChild(name);
     for (const s of sessions) g.appendChild(makeSessionItem(p, s));
@@ -2230,6 +2286,9 @@ function renderSessionList() {
     root.appendChild(empty);
   }
   applyActiveDots();
+  root.scrollTop = keepScroll;
+  const total = projectsCache.reduce((n, p) => n + (p.sessions?.length || 0), 0);
+  if (!raw) setFilterPlaceholder(total ? `筛选 ${total} 个会话…` : '筛选标题或对话内容…');
 }
 
 function markActiveSession(id) {
@@ -2238,11 +2297,34 @@ function markActiveSession(id) {
   document.querySelectorAll('.term-item').forEach(el => el.classList.remove('active'));
 }
 
-$('#filter').addEventListener('input', () => {
-  renderSessionList();
-  scheduleContentSearch();
-});
+function armSessionFilter() {
+  if ($('#filter')) return $('#filter');
+  const proxy = $('#filter-proxy');
+  if (!proxy) return null;
+  const el = document.createElement('input');
+  el.id = 'filter';
+  el.type = 'search';
+  el.name = 'cockpit-session-filter-' + Math.random().toString(36).slice(2, 8);
+  el.placeholder = proxy.textContent || '筛选标题或对话内容…';
+  el.autocomplete = 'off';
+  el.spellcheck = false;
+  el.setAttribute('autocorrect', 'off');
+  el.setAttribute('autocapitalize', 'off');
+  el.setAttribute('data-1p-ignore', '');
+  el.setAttribute('data-lpignore', 'true');
+  el.setAttribute('data-form-type', 'other');
+  proxy.replaceWith(el);
+  el.addEventListener('input', () => {
+    renderSessionList();
+    scheduleContentSearch();
+  });
+  el.focus();
+  return el;
+}
+$('#filter-proxy')?.addEventListener('click', armSessionFilter);
+$('#filter-proxy')?.addEventListener('focus', armSessionFilter);
 $('#btn-refresh').addEventListener('click', () => { loadProjects(); loadGraphMeta(); });
+fetch('/mail/api/health').then((r) => { if (r.ok) { const el = $('#btn-mail-board'); if (el) el.hidden = false; } }).catch(() => {});
 loadPins().then(loadProjects).then(() => {
   loadGraphMeta();
   // deep link from a push notification: /?session=<slug>/<id>
@@ -2662,7 +2744,7 @@ function renderSavedHosts() {
     div.addEventListener('click', () => {
       const f = $('#ssh-form');
       f.host.value = h.host; f.port.value = h.port || 22;
-      f.username.value = h.username; f.password.value = h.password || '';
+      f.ssh_user.value = h.username; f.ssh_pass.value = h.password || '';
     });
     root.appendChild(div);
   }
@@ -2733,8 +2815,8 @@ $('#ssh-dialog').addEventListener('close', () => {
   const conn = {
     host: f.host.value.trim(),
     port: parseInt(f.port.value, 10) || 22,
-    username: f.username.value.trim(),
-    password: f.password.value,
+    username: f.ssh_user.value.trim(),
+    password: f.ssh_pass.value,
   };
   if (f.save.checked) {
     const idx = savedHosts.findIndex(h => h.host === conn.host && h.username === conn.username);

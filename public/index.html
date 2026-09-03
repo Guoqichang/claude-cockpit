@@ -26,6 +26,7 @@
       <span class="brand">Claude Cockpit</span>
       <select id="peer-sel" title="会话所在机器" hidden></select>
       <span class="side-head-btns">
+        <button id="btn-intro" title="项目介绍">？</button>
         <button id="btn-setup" title="部署向导">◎</button>
         <button id="btn-phone" title="手机访问">▤</button>
         <button id="btn-refresh" title="刷新会话列表">⟳</button>
@@ -41,8 +42,11 @@
     </div>
     <div class="side-actions">
       <button id="btn-open-graph">◍ 会话图谱</button>
+      <a id="btn-mail-board" class="side-link" href="/mail/" hidden>校邮看板</a>
     </div>
-    <input id="filter" type="text" placeholder="筛选标题或对话内容…">
+    <div id="filter-slot">
+      <button type="button" id="filter-proxy" class="filter-proxy">筛选标题或对话内容…</button>
+    </div>
     <div id="term-list" class="side-section"></div>
     <div id="session-list" class="side-section grow"></div>
   </aside>
@@ -51,13 +55,84 @@
     <div id="welcome" class="view">
       <div class="welcome-inner" id="welcome-idle">
         <h1>Claude Cockpit</h1>
-        <p>左侧选一个会话继续聊，或开本地终端 / SSH。<br>第一次来：先把 OpenCode 跑通，再接别的引擎。</p>
-        <p><button type="button" class="setup-open-btn" id="btn-open-setup">打开部署向导</button></p>
+        <p>左侧选一个会话继续聊，或开本地终端 / SSH。</p>
+        <p id="welcome-setup-cta" hidden><button type="button" class="setup-open-btn" id="btn-welcome-setup">打开部署向导</button></p>
       </div>
+      <article class="intro" id="intro-panel" hidden>
+        <p class="intro-kicker">本机驾驶舱 · 只听 <span class="tag">127.0.0.1:7799</span></p>
+        <h1>Claude Cockpit 在干什么</h1>
+        <p>你要改本地项目里的顶栏登录按钮颜色。以前的做法是自己翻 <span class="tag">src/App.jsx</span>，把 <span class="tag">btn-muted</span> 改成金色。Vibecoding 换了一种干法：对着一条会话说人话，让带工具的模型去改那个文件。</p>
+        <p>驾驶舱不是又一个聊天网站。OpenCode / Claude Code / Cursor 才是干活的引擎；驾驶舱只是把本机已经存在的会话收进左侧列表，让你在浏览器里续上一轮、看图谱、开真终端。</p>
+        <p class="punch">先装 1 个 OpenCode 二进制、贴 1 把 API Key，端口 7799 就能聊。Claude 和 Cursor 是加餐，不是入场券。</p>
+
+        <section class="intro-demo" id="intro-demo" aria-label="一轮 vibecoding 怎么走">
+          <div class="intro-demo-head">
+            <h2>先看会动的：一轮怎么走完</h2>
+            <button type="button" id="intro-play">▶ 自动演示</button>
+          </div>
+          <p class="intro-demo-task">贯穿全场的那句话：<i>把顶栏登录按钮改成金色</i>。目标文件始终是 <span class="tag">src/App.jsx</span>，目标 class 从 <span class="tag">btn-muted</span> 换成 <span class="tag">btn-gold</span>。</p>
+          <div class="intro-stage" id="intro-stage">
+            <div class="intro-col" data-col="you">
+              <div class="intro-col-name">你</div>
+              <div class="intro-col-body" id="intro-you">还没开口</div>
+            </div>
+            <div class="intro-col" data-col="cockpit">
+              <div class="intro-col-name">驾驶舱 7799</div>
+              <div class="intro-col-body" id="intro-cockpit">空闲，没有会话</div>
+            </div>
+            <div class="intro-col" data-col="engine">
+              <div class="intro-col-name">OpenCode</div>
+              <div class="intro-col-body" id="intro-engine">引擎没被叫醒</div>
+            </div>
+            <div class="intro-col" data-col="disk">
+              <div class="intro-col-name">磁盘上的项目</div>
+              <div class="intro-col-body" id="intro-disk"><code>className="btn-muted"</code></div>
+            </div>
+            <div class="intro-token" id="intro-token" hidden></div>
+          </div>
+          <div class="intro-trail" id="intro-trail" aria-hidden="true"></div>
+          <p class="intro-caption" id="intro-caption">点 ▶ 自动演示，或点上面四个格子、下面一排脚印逐步看。</p>
+          <aside class="intro-ledger" id="intro-ledger">
+            <div><b>本轮账本</b></div>
+            <div>会话 <span class="nc" id="lg-ses">还没有</span></div>
+            <div>轮次 <span class="nc" id="lg-turn">0</span> / 2</div>
+            <div>App.jsx <span class="nw" id="lg-file">btn-muted</span></div>
+            <div>浏览器 <span class="nb" id="lg-browser">开着</span></div>
+            <div>改动是否还在 <span class="nc" id="lg-keep">尚未开改</span></div>
+          </aside>
+        </section>
+
+        <h2>三个词，从刚才那一轮推出来</h2>
+        <ul class="steps">
+          <li><b>引擎</b>：真正读文件、跑命令、改 <span class="tag">src/App.jsx</span> 的那个进程。驾驶舱里叫 OpenCode、Claude、Cursor、Hermes。驾驶舱自己不改你的代码。</li>
+          <li><b>会话</b>：同一条工作线程。有工作目录、有上一轮上下文。左侧列表里的一行，不是聊天 App 里的气泡墙。</li>
+          <li><b>一轮</b>：你发一条，引擎干活到交付。关掉 7799 的标签页只断了画面，轮次还在本机跑；OpenCode 的历史在 <span class="tag">~/.local/share/opencode</span>。</li>
+        </ul>
+
+        <h2>Vibecoding 五条，写进这条会话就能用</h2>
+        <ul class="steps">
+          <li><b>说要改哪，别说气氛。</b> 有效的是 <i>把顶栏登录按钮改成金色，文件是 src/App.jsx</i>。无效的是 <i>让页面高级一点</i>。</li>
+          <li><b>钉死工作目录。</b> 新会话的工作目录就是引擎允许下爪的文件夹。怕乱改全盘，就把目录指到那个前端项目，而不是用户主目录。</li>
+          <li><b>一小步验一次。</b> 先改 className，刷新浏览器确认金色，再提清空按钮。两步两轮，比一句做完全站更不容易翻车。</li>
+          <li><b>Key 是账单，不是咒语。</b> DeepSeek 那把 Key 只写进本机 <span class="tag">~/.config/opencode/opencode.json</span>。驾驶舱向导不会把 Key 送上公网口 <span class="tag">7788</span>。</li>
+          <li><b>飞轮从 OpenCode 开始。</b> 1 个二进制 + 1 把 Key 就能转。等左侧出现 OpenCode 分组，再决定要不要接 Claude / Cursor。</li>
+        </ul>
+
+        <div class="say">
+          <b>回到你现在这块屏</b>
+          左侧是会话列表。第一次来先点 <span class="tag">打开部署向导</span>，把 OpenCode 和 Key 补齐，再点 <span class="tag">＋ OpenCode</span>，把那句金色按钮的话发进去。已经会了就直接开聊；随时点左上角 <span class="tag">？</span> 回到这篇介绍。
+        </div>
+
+        <p class="intro-cta">
+          <button type="button" class="setup-open-btn" id="btn-open-setup">打开部署向导</button>
+          <button type="button" class="setup-open-btn intro-go-oc" id="btn-intro-opencode">＋ 开一条 OpenCode</button>
+        </p>
+      </article>
       <div id="setup-panel" class="setup-panel" hidden>
+        <p class="setup-back"><button type="button" id="setup-to-intro">← 先看项目介绍</button></p>
         <div class="setup-head">
           <h1>先把 OpenCode 跑通</h1>
-          <p class="setup-lead">别一上来装 Claude Code。OpenCode 一个命令、一把 Key，Cockpit 就能聊。这条飞轮转起来，再接 Cursor / Claude / Hermes。</p>
+          <p class="setup-lead">别一上来装 Claude Code。OpenCode 一个命令、一把 Key，驾驶舱就能聊。这条飞轮转起来，再接 Cursor / Claude / Hermes。</p>
         </div>
         <ol class="setup-steps">
           <li id="setup-step-env">
@@ -81,7 +156,7 @@
               <input id="setup-baseurl" type="url" placeholder="https://api.example.com/v1" autocomplete="off">
             </label>
             <label class="setup-field">API Key
-              <input id="setup-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false">
+              <input id="setup-key" type="text" placeholder="sk-…" autocomplete="off" spellcheck="false">
             </label>
             <button type="button" id="setup-save-key">写下这把 Key</button>
             <p class="setup-note" id="setup-key-msg"></p>
@@ -96,8 +171,8 @@
         <details class="setup-more">
           <summary>再接 Claude / Cursor / Hermes（可选）</summary>
           <ul>
-            <li><b>Claude Code</b>：装好官方 CLI，保证终端里能敲 <span class="tag">claude</span>，然后点「＋ Claude」。</li>
-            <li><b>Cursor Agent</b>：本机装过 Cursor 即可。点「＋ Cursor」。</li>
+            <li><b>Claude Code</b>：装好官方 CLI，保证终端里能敲 <span class="tag">claude</span>，然后点 <span class="tag">＋ Claude</span>。</li>
+            <li><b>Cursor Agent</b>：本机装过 Cursor 即可。点 <span class="tag">＋ Cursor</span>。</li>
             <li><b>Hermes</b>：本机有 <span class="tag">~/.hermes/state.db</span> 就会出现在侧栏。</li>
           </ul>
         </details>
@@ -110,7 +185,7 @@
         <div class="gh-title">会话图谱</div>
         <label class="gh-toggle"><input type="checkbox" id="graph-attention"> 注意力优先</label>
         <label class="gh-toggle"><input type="checkbox" id="graph-clusters" checked> 聚类分组</label>
-        <input id="graph-filter" type="text" placeholder="筛选…">
+        <input id="graph-filter" type="search" name="cockpit-graph-filter" placeholder="筛选…" autocomplete="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true">
         <span class="gh-stat" id="graph-stat"></span>
         <button id="graph-refresh" title="刷新">⟳</button>
       </header>
@@ -150,6 +225,7 @@
               <option value="" selected>默认</option>
               <optgroup id="og-claude" class="model-claude" label="Claude Code">
                 <option value="claude-opus-5">Opus 5</option>
+                <option value="claude-fable-5-1">Fable 5.1</option>
                 <option value="claude-fable-5">Fable 5</option>
                 <option value="claude-sonnet-5">Sonnet 5</option>
                 <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
@@ -168,6 +244,7 @@
                 <option value="composer-2.5">Composer 2.5</option>
                 <option value="claude-opus-5-thinking-high">Opus 5 Thinking</option>
                 <option value="claude-sonnet-5-thinking-high">Sonnet 5 Thinking</option>
+                <option value="claude-fable-5-1-thinking-high">Fable 5.1 Thinking</option>
                 <option value="claude-fable-5-thinking-high">Fable 5 Thinking</option>
                 <option value="gpt-5.6-sol-high">GPT-5.6 Sol High</option>
                 <option value="cursor-grok-4.6-high-fast">Grok 4.6 Fast</option>
@@ -236,15 +313,15 @@
 </div>
 
 <dialog id="ssh-dialog">
-  <form method="dialog" id="ssh-form">
+  <form method="dialog" id="ssh-form" autocomplete="off">
     <h2>SSH 连接</h2>
     <div id="saved-hosts"></div>
-    <label>主机 <input name="host" required placeholder="192.168.1.10"></label>
+    <label>主机 <input name="host" required placeholder="192.168.1.10" autocomplete="off"></label>
     <div class="row">
-      <label>端口 <input name="port" value="22" size="5"></label>
-      <label>用户 <input name="username" required placeholder="ubuntu"></label>
+      <label>端口 <input name="port" value="22" size="5" autocomplete="off"></label>
+      <label>用户 <input name="ssh_user" required placeholder="ubuntu" autocomplete="off"></label>
     </div>
-    <label>密码 <input name="password" type="password" required></label>
+    <label>密码 <input name="ssh_pass" type="text" required autocomplete="off" class="ssh-pass"></label>
     <label class="check"><input name="save" type="checkbox"> 保存该主机（密码明文存本机 ~/.claude-cockpit/，仅限自己电脑）</label>
     <div class="row end">
       <button value="ok" id="ssh-connect">连接</button>
@@ -289,6 +366,7 @@
 <script src="/vendor/xterm-fit/lib/addon-fit.js"></script>
 <script src="/icons.js"></script>
 <script src="/app.js"></script>
+<script src="/intro.js"></script>
 <script src="/setup.js"></script>
 <script src="/graph.js"></script>
 </body>

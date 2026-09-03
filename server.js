@@ -23,6 +23,7 @@ import { getKeys, addSub, removeSub, subCount, notify } from './lib/push.js';
 import { listProviders } from './lib/providers.js';
 import { holdAwake, releaseAwake, status as awakeStatus } from './lib/awake.js';
 import { isServableMediaPath } from './lib/cursor-uploads.js';
+import { mountHkmailBoard } from './lib/hkmail-board.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 7799);
@@ -69,6 +70,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+mountHkmailBoard(app);
 
 // vendor assets served straight from node_modules (no bundler)
 const nm = (p) => path.join(__dirname, 'node_modules', p);
