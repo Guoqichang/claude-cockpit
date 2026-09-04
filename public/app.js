@@ -1617,6 +1617,21 @@ function attachChat(v, ch, { start, fresh } = {}) {
         if (!v.ocMeta) v.ocMeta = {};
         v.ocMeta.mcp = e.mcp || {};
         renderOcChrome(v);
+      } else if (e.type === 'tool_call') {
+        const info = cursorToolInfo(e);
+        if (info) {
+          if (e.subtype === 'started') {
+            clearLiveBody(v);
+            liveState(v).tool = info.name;
+            spinnerLabel(v, spinner);
+            v.el.insertBefore(blockGroup(v, 'assistant',
+              [{ type: 'tool_use', id: info.id, name: info.name, input: info.args }]), spinner);
+          } else if (e.subtype === 'completed') {
+            liveState(v).tool = null;
+            v.el.insertBefore(blockGroup(v, 'tool-carrier',
+              [{ type: 'tool_result', tool_use_id: info.id, text: info.text, is_error: info.isError }]), spinner);
+          }
+        }
       } else if (e.type === 'thinking' && e.subtype === 'delta' && e.text) {
         handleStreamEvent(v, spinner, { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: e.text } });
       } else if (e.type === 'stream_event') {
@@ -1959,6 +1974,39 @@ const savedClaude = localStorage.getItem('model:claude') || localStorage.getItem
 if (savedClaude) { addModelOption(savedClaude, null, 'claude'); }
 const savedCursor = localStorage.getItem('model:cursor');
 if (savedCursor) { addModelOption(savedCursor, null, 'cursor'); }
+
+// ---------------- cursor tool calls ----------------
+// Cursor 不用 Anthropic 的 tool_use 块，而是发独立的 tool_call/started|completed
+// 事件，载荷形如 {tool_call: {shellToolCall: {args, result}}}。翻成前端已认识的
+// tool_use / tool_result，实时流才能和刷新后的渲染长得一样。
+const CURSOR_TOOL_LABEL = {
+  shellToolCall: 'Shell', readToolCall: 'Read', writeToolCall: 'Write',
+  editToolCall: 'Edit', deleteToolCall: 'Delete', lsToolCall: 'LS',
+  globToolCall: 'Glob', grepToolCall: 'Grep', searchToolCall: 'Search',
+  semanticSearchToolCall: 'Search', webSearchToolCall: 'WebSearch',
+  fetchToolCall: 'Fetch', todoToolCall: 'Todo', mcpToolCall: 'MCP',
+};
+
+function cursorToolInfo(ev) {
+  const wrap = ev?.tool_call;
+  if (!wrap || typeof wrap !== 'object') return null;
+  const key = Object.keys(wrap).find(k => k.endsWith('ToolCall'));
+  if (!key) return null;
+  const body = wrap[key] || {};
+  const name = CURSOR_TOOL_LABEL[key]
+    || key.replace(/ToolCall$/, '').replace(/^./, c => c.toUpperCase());
+  const a = body.args || {};
+  const summary = a.command || a.path || a.query || a.pattern || a.url || a.filePath || '';
+  // call_id 里可能带换行，当 DOM key 用要先规整
+  const id = String(ev.call_id || body.toolCallId || '').replace(/\s+/g, '_');
+  const r = body.result || {};
+  const ok = r.success || r.ok || null;
+  const err = r.error || r.failure || null;
+  let text = '';
+  if (ok) text = typeof ok === 'string' ? ok : (ok.content ?? JSON.stringify(ok));
+  else if (err) text = typeof err === 'string' ? err : (err.message ?? JSON.stringify(err));
+  return { id, name, args: a, summary: String(summary).slice(0, 200), text: String(text ?? ''), isError: !!err };
+}
 
 // ---------------- jump to bottom ----------------
 const jumpBtn = document.createElement('button');

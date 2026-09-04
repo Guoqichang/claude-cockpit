@@ -144,6 +144,16 @@ OpenCode 在 Windows 上仍然用「用户主目录下的点目录」，不是 `
 
 内嵌终端默认 PowerShell。若 `npm install` 编 `node-pty` 失败，先装 [VS Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) 的「Desktop development with C++」，再在仓库里重跑 `npm install`。没有内嵌终端时，聊天（OpenCode / Claude）仍可用。
 
+## Cursor 事件格式（和 Claude 完全不同）
+
+| Claude Code | Cursor Agent |
+|---|---|
+| `stream_event` 里的 `content_block_delta` 逐字 | `thinking/delta`（带 `text`） |
+| 工具是 assistant 消息里的 `tool_use` 块 | **独立的 `tool_call/started`、`tool_call/completed` 顶层事件** |
+| 结果是 user 消息里的 `tool_result` 块 | 结果嵌在 `tool_call.<xxxToolCall>.result.success.content` |
+
+踩过的坑：前端只认 Anthropic 那套，`tool_call` 事件被整个忽略 —— 表现是**跑着不动、刷新才冒出一堆行为**（刷新走的是 `cursor-sessions.js` 读 Cursor 自己的 transcript，那里工具已被规整成 `tool_use`/`tool_result`）。现在实时流把 `tool_call` 翻成同样的块，两条路径渲染一致；`lib/chat.js` 的状态灯也单独认这个事件。
+
 ## 会话图谱
 
 侧栏「◍ 会话图谱」把列表换成一张活地图。
