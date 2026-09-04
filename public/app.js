@@ -955,7 +955,13 @@ function showChatView(key) {
   messagesRoot.scrollTop = messagesRoot.scrollHeight;
 }
 
+function syncBusyChrome() {
+  const v = chatViews.get(currentChatKey);
+  document.getElementById('chat-view')?.classList.toggle('busy', !!v?.running);
+}
+
 function updateComposer(v) {
+  syncBusyChrome();
   const isCursor = v?.engine === 'cursor';
   const isHermes = v?.engine === 'hermes';
   const isOc = isOcTui(v);
@@ -1018,6 +1024,7 @@ function flushQueue(v) {
 function failRunningChat(v, reason) {
   clearInterval(v.tick);
   clearLive(v);
+  detachPulse(v);
   if (v.spinner) { v.spinner.remove(); v.spinner = null; }
   const err = document.createElement('div');
   err.className = 'error-line';
@@ -1240,7 +1247,93 @@ function appendSpinner(v) {
   s.className = 'spinner';
   s.textContent = `● ${engineLabel(v)} 运行中…`;
   v.el.appendChild(s);
+  attachPulse(v, s);
   return s;
+}
+
+// ---------------- 等待期的活体信号 ----------------
+// 等待最难受的不是慢，是"不知道它是在干活还是死了"。所以这条波形只由**真实到达的
+// 事件**驱动：有数据就起浪，没数据就走平线。绝不能是一个不管死活都在转的假动画——
+// 那正是之前 16056s 僵尸转圈骗过人的地方。
+const PULSE_SLOTS = 64;
+
+function attachPulse(v, spinner) {
+  const wrap = document.createElement('div');
+  wrap.className = 'pulse-row';
+  const cv = document.createElement('canvas');
+  cv.className = 'pulse-wave';
+  cv.width = PULSE_SLOTS * 4;
+  cv.height = 34;
+  const calm = document.createElement('span');
+  calm.className = 'pulse-note';
+  wrap.append(cv, calm);
+  spinner.insertAdjacentElement('afterend', wrap);
+
+  v.pulse = {
+    wrap, cv, calm, ctx: cv.getContext('2d'),
+    slots: new Array(PULSE_SLOTS).fill(0),
+    energy: 0, lastEventAt: Date.now(), startedAt: Date.now(),
+  };
+  v.pulseTimer = setInterval(() => drawPulse(v), 110);
+  drawPulse(v);
+}
+
+// 每个到达的事件给波形注入能量；大事件（正文、工具）浪更高
+function pulseEvent(v, weight = 1) {
+  if (!v.pulse) return;
+  v.pulse.energy = Math.min(1, v.pulse.energy + weight * 0.5);
+  v.pulse.lastEventAt = Date.now();
+}
+
+function drawPulse(v) {
+  const p = v.pulse;
+  if (!p || !p.ctx) return;
+  const silentMs = Date.now() - p.lastEventAt;
+  p.energy *= 0.82;                       // 没有新事件就迅速回落到平线
+  p.slots.push(p.energy);
+  p.slots.shift();
+
+  const { ctx, cv } = p;
+  const W = cv.width, H = cv.height, mid = H / 2;
+  ctx.clearRect(0, 0, W, H);
+
+  // 基线：始终画，提醒"通道还在"，但它自己不动
+  ctx.strokeStyle = 'rgba(138,115,64,.28)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
+
+  const step = W / (PULSE_SLOTS - 1);
+  const t = Date.now() / 220;
+  ctx.beginPath();
+  for (let i = 0; i < PULSE_SLOTS; i++) {
+    const amp = p.slots[i] * (H / 2 - 3);
+    const y = mid + Math.sin(i * 0.55 + t) * amp;
+    i ? ctx.lineTo(i * step, y) : ctx.moveTo(0, y);
+  }
+  const g = ctx.createLinearGradient(0, 0, W, 0);
+  g.addColorStop(0, 'rgba(201,164,92,.15)');
+  g.addColorStop(0.65, 'rgba(201,164,92,.85)');
+  g.addColorStop(1, '#39ff88');
+  ctx.strokeStyle = g;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  // 静默久了就说人话，而不是让用户自己猜要不要刷新
+  const secs = Math.round(silentMs / 1000);
+  const total = Math.round((Date.now() - p.startedAt) / 1000);
+  let note = '';
+  if (silentMs > 20000 && silentMs <= 75000) note = `已静默 ${secs} 秒 · 多半在长考或等工具返回`;
+  else if (silentMs > 75000 && silentMs <= 240000) note = `已静默 ${secs} 秒 · 仍在跑，不用刷新；关掉页面也不影响`;
+  else if (silentMs > 240000) note = `已静默 ${Math.round(secs / 60)} 分钟 · 卡死会自动收割并解锁，可以先去忙别的`;
+  else if (total > 8) note = '有数据在流';
+  if (p.calm.textContent !== note) p.calm.textContent = note;
+}
+
+function detachPulse(v) {
+  clearInterval(v.pulseTimer);
+  v.pulseTimer = null;
+  if (v.pulse?.wrap) v.pulse.wrap.remove();
+  v.pulse = null;
 }
 
 // ---------------- live streaming preview ----------------
@@ -1576,6 +1669,9 @@ function attachChat(v, ch, { start, fresh } = {}) {
     const atBottom = messagesRoot.scrollHeight - messagesRoot.scrollTop - messagesRoot.clientHeight < 60;
     if (m.op === 'chat.event') {
       v.evCount++;
+      const et = m.event?.type;
+      pulseEvent(v, et === 'assistant' || et === 'tool_call' || et === 'oc.part' ? 1
+        : et === 'stream_event' || et === 'thinking' || et === 'oc.delta' ? 0.55 : 0.3);
       const e = m.event;
       if (e.type === 'system' && e.subtype === 'init') {
         v.runningModel = e.model || engineLabel(v);
@@ -1711,6 +1807,7 @@ function attachChat(v, ch, { start, fresh } = {}) {
       // the continuation runs on a new channel — follow it
       wsHandlers.delete(ch);
       clearInterval(v.tick);
+      detachPulse(v);
       spinner.remove();
       v.spinner = null;
       v.running = false; v.ch = null;
@@ -1720,6 +1817,7 @@ function attachChat(v, ch, { start, fresh } = {}) {
     } else if (m.op === 'chat.done') {
       clearInterval(v.tick);
       clearLive(v);
+      detachPulse(v);
       spinner.remove();
       v.spinner = null;
       const stopped = v.stopRequested;
