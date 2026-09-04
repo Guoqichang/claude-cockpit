@@ -205,6 +205,8 @@ curl -sS -H 'Content-Type: application/json' \
   http://127.0.0.1:7799/api/open/chat
 ```
 
+**OpenCode 的事件流按 `directory` 隔离**：订阅 `/event` 不带 `?directory=` 只能收到 `server.connected` / `server.heartbeat`，会话里的 `message.part.delta` 一个都到不了 —— 表现是 `prompt_async` 返回 204、模型其实跑完了、但驾驶舱永远转圈。排查时注意 `/session/{id}/message` 能查到完整回复，说明引擎没问题、是订阅漏了参数。
+
 ## 抖动自动续跑
 
 连接中断 / 网关抖动 / 电脑睡醒会让一轮半途而废。`lib/chat.js` 只对可恢复错误自动续（最多 2 次，退避 4s → 12s）。**OpenCode 轮次不自动 retry**（serve 自己管流）。
