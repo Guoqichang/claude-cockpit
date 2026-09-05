@@ -154,6 +154,31 @@ OpenCode 在 Windows 上仍然用「用户主目录下的点目录」，不是 `
 
 踩过的坑：前端只认 Anthropic 那套，`tool_call` 事件被整个忽略 —— 表现是**跑着不动、刷新才冒出一堆行为**（刷新走的是 `cursor-sessions.js` 读 Cursor 自己的 transcript，那里工具已被规整成 `tool_use`/`tool_result`）。现在实时流把 `tool_call` 翻成同样的块，两条路径渲染一致；`lib/chat.js` 的状态灯也单独认这个事件。
 
+## Cursor 额度耗尽会把历史对话覆写掉
+
+换 Cursor 账号或额度用完时，Cursor 会把整个 `agent-transcripts/<id>/<id>.jsonl` **覆写成一行错误**：
+
+```json
+{"type":"turn_ended","status":"error","error":"...You're out of usage..."}
+```
+
+原来几百上千条对话在 jsonl 侧就此蒸发，Cockpit 侧栏显示「0 条」。**不是 Cockpit 删的，也不是真的没了** —— 消息原文还在 Cursor 自己的 `~/.cursor/chats/<wsHash>/<id>/store.db` 里。
+
+那是个内容寻址的 blob 仓，两类内容：
+
+| blob | 内容 |
+|---|---|
+| 消息 | **明文 JSON** `{role, content:[...]}`（AI SDK 格式，没有加密） |
+| 列表 | protobuf 重复字段 1，每项 `0x0a 0x20` + 32 字节子 blob 哈希 |
+
+`meta` 里的 `blobEncryptionKey` 是幌子 —— 一开始拿它试了四种 AES 组合全失败，其实 root blob 根本不是密文，是一串哈希。
+
+难点在**时序**：单个列表只覆盖当时的上下文窗口，被 summarize 之后就断了。解法是把**所有**列表 blob 的相邻对当作先后边做拓扑排序 —— 实测 1116 个列表、1588 个节点，无环，全序唯一。`lib/cursor-store.js` 干这件事，`cursor-sessions.js` 在 transcript 是空壳时自动切过去（列表条数、标题、正文、全文搜索都走这条回退路径）。55MB 的库冷启动重建 180ms，之后按 mtime 缓存。
+
+顺带两个细节：store.db 里的 user 消息是发给模型的完整 payload，真问题外面裹着两三万字的 `<user_info>`/`<rules>` 环境块，得层层剥掉；Cursor 压缩上下文时以 user 身份塞的那份摘要会被收进折叠的思考块，不让它冒充用户发言。
+
+如果 store.db 里也确实没消息（比如刚开会话发了句 hi 就撞上额度墙），会话正文会直接说明原因，而不是留个空白让人以为数据丢了。
+
 ## 会话图谱
 
 侧栏「◍ 会话图谱」把列表换成一张活地图。

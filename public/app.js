@@ -568,6 +568,7 @@ function renderBlocks(container, role, blocks, toolMap) {
       }
       wrap.appendChild(bub);
     }
+    attachUserTurnNav(wrap);
     container.appendChild(wrap);
   }
 }
@@ -649,13 +650,66 @@ function ocFooterEl(b) {
   return line;
 }
 
+function userTurnNodes(root) {
+  return [...(root || document).querySelectorAll('[data-user-turn]')];
+}
+
+function jumpUserTurn(fromEl, dir) {
+  const v = chatViews.get(currentChatKey);
+  if (!v) return;
+  const all = userTurnNodes(v.el);
+  const i = all.indexOf(fromEl);
+  const t = all[i + dir];
+  if (!t) return;
+  t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function attachUserTurnNav(wrap) {
+  wrap.dataset.userTurn = '1';
+  if (wrap.querySelector(':scope > .user-turn-nav')) return wrap;
+  const nav = document.createElement('div');
+  nav.className = 'user-turn-nav';
+  const up = document.createElement('button');
+  up.type = 'button';
+  up.className = 'user-turn-btn';
+  up.title = '上一条我的发言';
+  up.setAttribute('aria-label', '上一条我的发言');
+  up.textContent = '↑';
+  const dn = document.createElement('button');
+  dn.type = 'button';
+  dn.className = 'user-turn-btn';
+  dn.title = '下一条我的发言';
+  dn.setAttribute('aria-label', '下一条我的发言');
+  dn.textContent = '↓';
+  up.addEventListener('click', (e) => { e.stopPropagation(); jumpUserTurn(wrap, -1); });
+  dn.addEventListener('click', (e) => { e.stopPropagation(); jumpUserTurn(wrap, 1); });
+  nav.append(up, dn);
+  wrap.prepend(nav);
+  const host = wrap.closest?.('.chat-thread') || wrap.parentElement;
+  if (host) refreshUserTurnNav(host);
+  return wrap;
+}
+
+function refreshUserTurnNav(root) {
+  const all = userTurnNodes(root);
+  all.forEach((el, i) => {
+    const btns = el.querySelectorAll(':scope > .user-turn-nav .user-turn-btn');
+    if (btns[0]) btns[0].disabled = i === 0;
+    if (btns[1]) btns[1].disabled = i === all.length - 1;
+  });
+}
+
 function renderOcBlocks(container, role, blocks) {
   if (role === 'user') {
     const texts = (blocks || []).filter((b) => b.type === 'text').map((b) => b.text).filter(Boolean);
     if (!texts.length) return;
     const wrap = document.createElement('div');
     wrap.className = 'oc-user';
-    wrap.textContent = texts.join('\n');
+    const body = document.createElement('div');
+    body.className = 'oc-user-body';
+    body.textContent = texts.join('\n');
+    wrap.appendChild(body);
+    attachUserTurnNav(wrap);
     container.appendChild(wrap);
     return;
   }
@@ -706,6 +760,13 @@ function paintOcPart(el, part) {
 
 function ocPartEl(v, part, spinner) {
   if (!part?.id) return;
+  if (part.type === 'step-start' || part.type === 'step-finish' || part.type === 'compaction') return;
+  // live echo of the prompt we already drew as .oc-user
+  if (part.type === 'text') {
+    const t = String(part.text || '').trim();
+    const last = lastUserBubbleText(v.el);
+    if (t && last && t === last) return;
+  }
   if (!v.ocMap) v.ocMap = new Map();
   if (!v.ocParts) v.ocParts = new Map();
   v.ocParts.set(part.id, part);
@@ -1077,6 +1138,7 @@ function renderPage(v, messages) {
     else if (v.engine === 'opencode') renderBlocks(page, m.role, ocBlocksToStd(m.blocks), v.toolMap);
     else renderBlocks(page, m.role, m.blocks, v.toolMap);
   }
+  refreshUserTurnNav(page);
   return page;
 }
 
@@ -1134,7 +1196,7 @@ async function openSession(slug, id) {
 // Another device (phone ↔ desktop) may have appended to this session's file.
 // Pull just the new messages instead of re-rendering the whole conversation.
 function lastUserBubbleText(el) {
-  const nodes = el.querySelectorAll('.msg-user .bubble');
+  const nodes = el.querySelectorAll('.msg-user .bubble, .oc-user-body');
   return nodes.length ? (nodes[nodes.length - 1].textContent || '').trim() : '';
 }
 
@@ -1179,10 +1241,13 @@ async function syncSession(v) {
     const added = data.total - v.total;
     let fresh = data.messages.slice(Math.max(0, data.messages.length - added));
     // dispatch() already painted the local user bubble; a stale watermark
-    // would replay it as a second 「你」. Drop a leading duplicate.
+    // would replay it as a second 「你」. Drop leading duplicates.
     const lastUser = lastUserBubbleText(v.el);
-    const firstUser = (fresh[0]?.blocks || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (fresh[0]?.role === 'user' && lastUser && firstUser === lastUser) fresh = fresh.slice(1);
+    while (fresh[0]?.role === 'user' && lastUser) {
+      const firstUser = (fresh[0].blocks || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+      if (!firstUser || firstUser !== lastUser) break;
+      fresh = fresh.slice(1);
+    }
     if (!fresh.length) { v.total = data.total; return; }
     const atBottom = messagesRoot.scrollHeight - messagesRoot.scrollTop - messagesRoot.clientHeight < 80;
     v.el.appendChild(renderPage(v, fresh));
@@ -1611,6 +1676,7 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
   if (text) blocks.push({ type: 'text', text });
   if (isOcTui(v)) renderOcBlocks(v.el, 'user', blocks);
   else renderBlocks(v.el, 'user', blocks, v.toolMap);
+  refreshUserTurnNav(v.el);
   armLocalTurn(v);
   if (oneShotModel) {
     const tag = document.createElement('div');

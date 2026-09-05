@@ -378,6 +378,7 @@ body {
 #chat-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
 #messages { flex: 1; overflow-y: auto; padding: 20px clamp(20px, 6%, 80px); }
 .msg { margin-bottom: 18px; max-width: 100%; }
+.msg-user { position: relative; padding-left: 28px; }
 .msg-user .bubble {
   background: var(--user-bg); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 14px; white-space: pre-wrap;
@@ -913,9 +914,28 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 .oc-dot { width: 7px; height: 7px; border-radius: 50%; background: #39ff88; box-shadow: 0 0 5px #39ff88; }
 
 .oc-user {
-  border-top: 1px solid #1c1c1c; margin: 12px 0 14px; padding-top: 12px;
-  white-space: pre-wrap; color: #eaeaea;
+  position: relative;
+  border-top: 1px solid #1c1c1c; margin: 12px 0 14px; padding: 12px 0 0 28px;
+  color: #eaeaea;
 }
+.oc-user-body { white-space: pre-wrap; }
+.user-turn-nav {
+  position: absolute; left: 0; top: 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.user-turn-btn {
+  width: 20px; height: 18px; padding: 0;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg-panel); color: var(--fg-dim);
+  font-size: 11px; line-height: 16px; cursor: pointer;
+}
+.user-turn-btn:hover:not(:disabled) { color: var(--gold); border-color: var(--gold-dim); }
+.user-turn-btn:disabled { opacity: .28; cursor: default; }
+#chat-view.oc-mode .user-turn-btn {
+  background: #111; border-color: #2a2a2a; color: #8a8a8a;
+}
+#chat-view.oc-mode .user-turn-btn:hover:not(:disabled) { color: #f5a24a; border-color: #5a4630; }
+.oc-user, .msg-user { scroll-margin-top: 16px; }
 .oc-thought { margin: 8px 0; color: #f5a24a; }
 .oc-thought summary {
   cursor: pointer; list-style: none; font-size: 13px; color: #f5a24a;
