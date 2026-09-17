@@ -24,6 +24,10 @@ import { listProviders } from './lib/providers.js';
 import { holdAwake, releaseAwake, status as awakeStatus } from './lib/awake.js';
 import { isServableMediaPath } from './lib/cursor-uploads.js';
 import { mountHkmailBoard } from './lib/hkmail-board.js';
+import { mountZenOpenAI } from './lib/zen-openai.js';
+import { codexStatus } from './lib/codex.js';
+import { noteChatFinished, harvest as harvestLexicon, status as lexiconStatus, funasrUrl } from './lib/asr-lexicon.js';
+import { proxyDictate } from './lib/asr-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 7799);
@@ -71,6 +75,7 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 mountHkmailBoard(app);
+mountZenOpenAI(app);
 
 // vendor assets served straight from node_modules (no bundler)
 const nm = (p) => path.join(__dirname, 'node_modules', p);
@@ -119,6 +124,11 @@ app.get('/api/hermes/status', (req, res) => {
 
 app.get('/api/opencode/status', (req, res) => {
   try { res.json(ocStatus()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/codex/status', (req, res) => {
+  try { res.json(codexStatus()); }
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -202,7 +212,7 @@ app.get('/api/open/chats', (req, res) => {
 app.post('/api/open/chat', async (req, res) => {
   try {
     const b = req.body || {};
-    const engine = b.engine === 'hermes' || b.engine === 'cursor' || b.engine === 'opencode' ? b.engine : 'claude';
+    const engine = b.engine === 'hermes' || b.engine === 'cursor' || b.engine === 'opencode' || b.engine === 'codex' ? b.engine : 'claude';
     const prompt = String(b.prompt || b.message || '').trim();
     if (!prompt) { res.status(400).json({ error: 'prompt required' }); return; }
     const ch = 'o' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
@@ -283,6 +293,23 @@ app.post('/api/push/test', async (req, res) => {
   res.json({ sent });
 });
 
+app.get('/api/lexicon', (req, res) => res.json(lexiconStatus()));
+app.get('/api/asr', async (req, res) => {
+  const url = funasrUrl();
+  try {
+    const r = await fetch(url + '/health', { signal: AbortSignal.timeout(1500) });
+    const h = await r.json();
+    res.json({
+      ok: h.app === 'funasr-tingtai',
+      url,
+      recording: !!h.recording,
+      dictate: h.dictate === true,
+      error: h.app === 'funasr-tingtai' ? '' : '不是试听台',
+    });
+  } catch {
+    res.json({ ok: false, url, recording: false, dictate: false, error: '试听台没开' });
+  }
+});
 app.get('/api/awake', (req, res) => res.json(awakeStatus()));
 app.post('/api/awake', (req, res) => {
   const h = Number(req.body?.hours);
@@ -360,6 +387,7 @@ app.post('/api/hosts', (req, res) => {
 const server = http.createServer(app);       // local desktop listener
 const authServer = http.createServer(app);   // tunnel-facing listener (token required)
 const wss = new WebSocketServer({ noServer: true, maxPayload: 120 * 1024 * 1024 });
+const asrWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -399,6 +427,30 @@ function originAllowed(req, mode) {
 function wireUpgrade(srv, { requireAuth, originMode }) {
   srv.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://x');
+    if (url.pathname === '/ws/asr') {
+      if (!originAllowed(req, originMode)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        log('ws/asr rejected (origin)', req.headers.origin || '(none)');
+        return;
+      }
+      if (requireAuth) {
+        const key = clientKey(req);
+        if (isLocked(key) || !checkToken(req, url)) {
+          noteFailure(key);
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          log('ws/asr rejected (auth)', key);
+          return;
+        }
+        noteSuccess(key);
+      }
+      asrWss.handleUpgrade(req, socket, head, (ws) => {
+        log('asr proxy', req.socket.remoteAddress);
+        proxyDictate(ws, funasrUrl());
+      });
+      return;
+    }
     if (url.pathname !== '/ws') { socket.destroy(); return; }
     if (!originAllowed(req, originMode)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
@@ -521,6 +573,13 @@ setInterval(() => {
 // finished turn → phone notification
 onChatDone(async ({ sessionId, code, result, startedAt, cwd }) => {
   try {
+    const r = noteChatFinished();
+    Promise.resolve(r).then((x) => {
+      if (x?.ok) log('lexicon harvest', (x.out || '').split('\n')[0]);
+      else if (x?.error) log('lexicon harvest failed', x.error);
+    }).catch((e) => log('lexicon harvest failed', String(e)));
+  } catch (e) { log('lexicon', String(e)); }
+  try {
     const meta = sessionId ? await findSessionMeta(sessionId) : null;
     const title = meta?.title || '新会话';
     const secs = Math.max(0, Math.round((Date.now() - (startedAt || Date.now())) / 1000));
@@ -549,6 +608,14 @@ function tailscaleV4() {
   } catch { return ''; }
 }
 
+function hasLocalAddr(ip) {
+  const ifs = os.networkInterfaces();
+  for (const addrs of Object.values(ifs)) {
+    for (const a of addrs || []) if (a.address === ip) return true;
+  }
+  return false;
+}
+
 // Local desktop: 127.0.0.1:PORT, no token. Tailscale/tunnel: AUTH_PORT (or
 // AUTH_ONLY on PORT) always demands the token.
 if (!AUTH_ONLY) {
@@ -556,6 +623,14 @@ if (!AUTH_ONLY) {
     const n = restoreChats();
     console.log(`claude-cockpit: http://127.0.0.1:${PORT}${n ? ` (恢复 ${n} 个运行中的轮次)` : ''}`);
     if (ocBinOk()) ensureServe().catch((err) => console.log('opencode serve:', err.message || err));
+    if (!lexiconStatus().file) {
+      setTimeout(() => {
+        harvestLexicon().then((x) => {
+          if (x?.ok) console.log('lexicon initial harvest ok');
+          else if (x?.error) console.log('lexicon initial:', x.error);
+        }).catch((e) => console.log('lexicon initial:', e.message || e));
+      }, 15000);
+    }
   });
   authServer.listen(AUTH_PORT, '127.0.0.1', () => {
     getToken();
@@ -564,12 +639,17 @@ if (!AUTH_ONLY) {
   // same AUTH_PORT on the Tailscale address so pcy-02 / phone on the tailnet
   // can reach this Mac without going through the public reverse tunnel
   const ts = tailscaleV4();
-  if (ts) {
+  if (ts && hasLocalAddr(ts)) {
     const tsServer = http.createServer(app);
     wireUpgrade(tsServer, { requireAuth: true, originMode: 'public' });
+    tsServer.on('error', (err) => {
+      console.log('claude-cockpit tailscale listen skipped:', err.message || err);
+    });
     tsServer.listen(AUTH_PORT, ts, () => {
       console.log(`claude-cockpit tailscale: ${ts}:${AUTH_PORT} (需要令牌)`);
     });
+  } else if (ts) {
+    console.log(`claude-cockpit tailscale skip: ${ts} 当前不在网卡上`);
   }
 } else {
   authServer.listen(PORT, BIND, () => {

@@ -64,6 +64,7 @@
       dot(!!en.claude, true, en.claude ? 'Claude Code 也在，可点「＋ Claude」' : 'Claude Code 未装，可以后再说'),
       dot(!!en.cursor, true, en.cursor ? 'Cursor 也在，可点「＋ Cursor」' : 'Cursor 未装，可以后再说'),
       dot(!!en.hermes, true, en.hermes ? 'Hermes 也在' : 'Hermes 未装，可以后再说'),
+      dot(!!en.codex, true, en.codex ? 'Codex CLI 也在，可点「＋ Codex」走 Union Alpha' : 'Codex CLI 未装（ChatGPT.app 里的 codex）'),
     ].join('');
 
     const binOk = !!oc.binOk;

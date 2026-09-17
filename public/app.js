@@ -577,8 +577,11 @@ function ocModelLabel(model, provider) {
   const m = String(model || '');
   const p = String(provider || '');
   let name = m;
-  if (/deepseek-v4-pro/i.test(m)) name = 'DeepSeek V4 Pro';
+  if (/union-alpha/i.test(m)) name = 'Union Alpha';
+  else if (/deepseek-v4-pro/i.test(m)) name = 'DeepSeek V4 Pro';
   else if (/deepseek-v4-flash/i.test(m)) name = 'DeepSeek V4 Flash';
+  if (/opencode/i.test(p) && /union-alpha/i.test(m)) name += ' Free';
+  if (/openrouter/i.test(p) && /union-alpha/i.test(m)) name += '（OpenRouter）';
   if (/deepseek/i.test(p) && /v4-pro/i.test(m)) name += '（官方）';
   return name || m || 'OpenCode';
 }
@@ -734,18 +737,52 @@ function renderOcBlocks(container, role, blocks) {
 }
 
 function paintOcPart(el, part) {
-  el.innerHTML = '';
-  if (!part) return;
+  if (!part) { el.innerHTML = ''; return; }
   if (part.type === 'reasoning') {
     const tm = part.time || {};
     const dur = tm.end && tm.start ? tm.end - tm.start : (tm.start ? Date.now() - tm.start : null);
-    el.appendChild(ocThoughtEl(part.text || '', dur, !tm.end));
-  } else if (part.type === 'tool') {
+    // 一段长思考会推上千个 delta（实测 8192 个 / 19640 字）。原来每个 delta 都
+    // innerHTML='' 整体重建 <details>，累计 80M 字符的 DOM 重建（O(n²)），
+    // 而且重建会把 .oc-thought-body 的滚动位置清零 —— body 又有 max-height:240px，
+    // 于是永远停在思考的开头，新内容全堆在视口下面看不见，看着就是"啥也没输出"。
+    // 改成：已经画过就只追加新增的那一截，并让视口跟到最新一行。
+    const cur = el.firstElementChild;
+    if (cur && cur.classList && cur.classList.contains('oc-thought')) {
+      const sum = cur.querySelector('summary');
+      const body = cur.querySelector('.oc-thought-body');
+      const d = fmtOcDur(dur);
+      const label = d ? `+ Thought: ${d}` : '+ Thought';
+      if (sum && sum.textContent !== label) sum.textContent = label;
+      const txt = part.text || '';
+      const prev = body.__ocLen || 0;
+      if (txt.length > prev && txt.startsWith(body.textContent)) {
+        body.appendChild(document.createTextNode(txt.slice(prev)));
+        body.__ocLen = txt.length;
+      } else if (txt.length !== prev) {
+        body.textContent = txt;
+        body.__ocLen = txt.length;
+      }
+      if (!tm.end) { cur.open = true; body.scrollTop = body.scrollHeight; }
+      return;
+    }
+    el.innerHTML = '';
+    const det = ocThoughtEl(part.text || '', dur, !tm.end);
+    el.appendChild(det);
+    const b = det.querySelector('.oc-thought-body');
+    if (b) { b.__ocLen = (part.text || '').length; b.scrollTop = b.scrollHeight; }
+    return;
+  }
+  el.innerHTML = '';
+  if (part.type === 'tool') {
     const st = part.state || {};
     const inp = st.input && typeof st.input === 'object' ? st.input : {};
     el.appendChild(ocToolEl({
       name: part.tool, title: st.title, command: inp.command || inp.cmd || '',
-      output: typeof st.output === 'string' ? st.output : '',
+      // 命令跑着的时候 state.output 还不存在，实时 stdout 在 state.metadata.output 里；
+      // 只读前者的话，一条跑几百秒的命令在界面上就是一片空白 —— 看着像卡死，
+      // 其实 OpenCode 一直在把增量输出推过来（实测单次调用更新了 37 次）。
+      output: typeof st.output === 'string' ? st.output
+        : (typeof st.metadata?.output === 'string' ? st.metadata.output : ''),
       status: st.status, error: typeof st.error === 'string' ? st.error : '',
     }));
   } else if (part.type === 'text') {
@@ -1025,6 +1062,7 @@ function updateComposer(v) {
   syncBusyChrome();
   const isCursor = v?.engine === 'cursor';
   const isHermes = v?.engine === 'hermes';
+  const isCodex = v?.engine === 'codex';
   const isOc = isOcTui(v);
   syncModelSelector(v?.engine || 'claude');
   $('#btn-send').textContent = v.running ? '排队' : '发送';
@@ -1035,13 +1073,15 @@ function updateComposer(v) {
       ? '/~ 发给 Reverse Agent，Enter 发送'
       : isHermes
         ? '输入发给 Hermes Agent，Enter 发送'
+        : isCodex
+          ? '输入发给 Codex CLI，Enter 发送 · 默认 Union Alpha'
         : (isCursor
           ? '输入发给 Cursor Agent，Enter 发送 · 可粘贴/拖入图片和文件'
           : '输入消息，Enter 发送，Shift+Enter 换行');
-  $('#btn-attach').hidden = isHermes || isOc;
+  $('#btn-attach').hidden = isHermes || isOc || isCodex;
   $('#btn-attach').title = isCursor ? '添加图片或文件（落盘后按路径发给 Agent）' : '添加图片';
   $('#file-input').accept = isCursor ? '' : 'image/*';
-  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor || isHermes || isOc);
+  $('#perm-mode')?.closest('label')?.toggleAttribute('hidden', isCursor || isHermes || isOc || isCodex);
 }
 
 function enqueue(v, text, atts = [], model = null) {
@@ -1277,14 +1317,14 @@ async function adoptLiveTurn(v) {
   // pull it in first, then stream the rest live
   await syncSession(v);
   if (v.running) return;
-  attachChat(v, live.ch, { fresh: true });
+  attachChat(v, live.ch, { fresh: true, prompt: live.prompt });
 }
 
 function newChat(cwd, engine = 'claude') {
   const key = 'new-' + (++chSeq);
   const titles = {
     cursor: '新 Cursor 会话', hermes: '新 Hermes 会话',
-    opencode: '新 OpenCode 会话',
+    opencode: '新 OpenCode 会话', codex: '新 Codex 会话',
   };
   getOrCreateChatView(key, {
     slug: null, id: null, cwd: cwd || '', engine,
@@ -1297,13 +1337,14 @@ function newChat(cwd, engine = 'claude') {
 }
 
 function engineName(engine) {
-  return engine === 'cursor' ? 'Cursor' : engine === 'hermes' ? 'Hermes' : engine === 'opencode' ? 'OpenCode' : 'Claude';
+  return engine === 'cursor' ? 'Cursor' : engine === 'hermes' ? 'Hermes' : engine === 'opencode' ? 'OpenCode' : engine === 'codex' ? 'Codex' : 'Claude';
 }
 function engineBadge(engine) {
-  return engine === 'cursor' ? 'CR' : engine === 'hermes' ? 'HM' : engine === 'opencode' ? 'OC' : 'CC';
+  return engine === 'cursor' ? 'CR' : engine === 'hermes' ? 'HM' : engine === 'opencode' ? 'OC' : engine === 'codex' ? 'CX' : 'CC';
 }
 function engineLabel(v) {
   if (v?.engine === 'opencode') return v.agent || 'reverse';
+  if (v?.engine === 'codex') return 'codex';
   return v?.engine === 'cursor' ? 'agent' : v?.engine === 'hermes' ? 'hermes' : 'claude';
 }
 
@@ -1427,12 +1468,47 @@ function clearLive(v) {
   v.live = null;
 }
 
+/* 断连期间界面一片空白最让人以为程序死了，所以给一行会自己走秒的提示；
+   恢复后把它定格成"中断了多久"的记录，下次断连另起一行。 */
+function reconnNote(v, spinner, doneSecs) {
+  const st = liveState(v);
+  if (doneSecs != null) {
+    if (v.reconnEl) {
+      v.reconnEl.textContent = `⚡ 连接已恢复（中断 ${doneSecs}s）`;
+      v.reconnEl.classList.add('ok');
+    }
+    if (v.reconnTimer) { clearInterval(v.reconnTimer); v.reconnTimer = null; }
+    v.reconnEl = null;
+    return;
+  }
+  if (!v.reconnEl || v.reconnEl.parentNode !== v.el) {
+    v.reconnEl = document.createElement('div');
+    v.reconnEl.className = 'reconn-line';
+    const host = spinner || v.spinner;
+    if (host && host.parentNode === v.el) v.el.insertBefore(v.reconnEl, host);
+    else v.el.appendChild(v.reconnEl);
+  }
+  const tick = () => {
+    if (!st.reconnect || !v.reconnEl) {
+      if (v.reconnTimer) { clearInterval(v.reconnTimer); v.reconnTimer = null; }
+      return;
+    }
+    const secs = Math.round((Date.now() - st.reconnect.at) / 1000);
+    v.reconnEl.textContent =
+      `⚠ 与 Cursor 的连接中断，正在重连（第 ${st.reconnect.attempt} 次）… ${secs}s`;
+  };
+  tick();
+  if (v.reconnTimer) clearInterval(v.reconnTimer);
+  v.reconnTimer = setInterval(tick, 500);
+}
+
 function spinnerLabel(v, spinner) {
   const st = liveState(v);
   const secs = Math.round((Date.now() - st.startedAt) / 1000);
   const model = v.runningModel || engineLabel(v);
   const parts = [`● ${model}`];
-  if (st.tool) parts.push(`正在用 ${st.tool}`);
+  if (st.reconnect) parts.push(`连接中断，重连中（第 ${st.reconnect.attempt} 次）`);
+  else if (st.tool) parts.push(`正在用 ${st.tool}`);
   else parts.push('运行中');
   parts.push(`${secs}s`);
   if (st.tokens) parts.push(`${st.tokens.toLocaleString()} tok`);
@@ -1684,7 +1760,7 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
     tag.textContent = `本轮使用 ${oneShotModel}`;
     v.el.appendChild(tag);
   }
-  if (v.engine !== 'cursor' && v.engine !== 'opencode') warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
+  if (v.engine !== 'cursor' && v.engine !== 'opencode' && v.engine !== 'codex') warnIfContextTooBig(v, oneShotModel || $('#model-sel').value);
   const ch = 'c' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
   const payloadAtts = v.engine === 'cursor'
     ? atts.map(a => ({ name: a.name, mediaType: a.mediaType, data: a.data }))
@@ -1699,7 +1775,54 @@ function dispatch(v, text, atts = [], oneShotModel = null) {
   });
 }
 
-function attachChat(v, ch, { start, fresh } = {}) {
+/* 前端版的附件索引解析：materializeCursorAttachments 把图片/文件写到磁盘后，
+   以 <image_files> / <files> 段落 + 绝对路径塞进 prompt。这里按同样格式解回来。 */
+function splitPromptIndex(text) {
+  const src = String(text || '');
+  const grab = (block) => {
+    const out = [];
+    if (!block) return out;
+    for (const m of block.matchAll(/^\s*\d+\.\s+(\S.+)$/gm)) out.push(m[1].trim());
+    return out;
+  };
+  const images = grab(src.match(/<image_files>([\s\S]*?)<\/image_files>/)?.[1]);
+  const files = grab(src.match(/<files>([\s\S]*?)<\/files>/)?.[1]);
+  const cleaned = src
+    .replace(/\[Image\]\s*/g, '')
+    .replace(/<image_files>[\s\S]*?<\/image_files>\s*/g, '')
+    .replace(/<files>[\s\S]*?<\/files>\s*/g, '')
+    .replace(/^请查看附件。\s*/, '')
+    .replace(/^（见附图）\s*/, '')
+    .trim();
+  return { cleaned, images, files };
+}
+
+/* 刷新后把用户自己那句话补画回去。
+   引擎不回显用户输入，Cursor 还要等真正开始处理才写 transcript ——
+   在这个空窗里刷新，你打的字既不在会话文件里也不在事件流里，屏幕上直接没了。
+   传长文本 + 图片时尤其容易踩到：那一轮要先落盘附件，启动更慢，空窗更长。
+   OpenCode 自己会把 prompt 当 oc.delta 回显（已画成 .oc-user），所以跳过。 */
+function echoMissingPrompt(v, prompt) {
+  if (!prompt || v.engine === 'opencode') return;
+  const { cleaned, images, files } = splitPromptIndex(prompt);
+  if (!cleaned && !images.length && !files.length) return;
+  const probe = cleaned.trim();
+  const last = lastUserBubbleText(v.el);
+  // 会话文件里已经有这句了就别画第二遍（长文本会被截断，所以用包含关系判断）
+  if (probe && last && (last === probe || last.includes(probe) || probe.includes(last))) return;
+  const blocks = [];
+  const url = (fp) => '/api/local-file?path=' + encodeURIComponent(fp);
+  for (const fp of images) blocks.push({ type: 'image', url: url(fp) });
+  for (const fp of files) blocks.push({ type: 'file', name: fp.split('/').pop(), url: url(fp) });
+  if (cleaned) blocks.push({ type: 'text', text: cleaned });
+  if (!blocks.length) return;
+  const frag = document.createElement('div');
+  renderBlocks(frag, 'user', blocks, v.toolMap);
+  v.el.appendChild(frag);
+}
+
+function attachChat(v, ch, { start, fresh, prompt } = {}) {
+  if (fresh) echoMissingPrompt(v, prompt);
   const spinner = appendSpinner(v);
   spinner.textContent = fresh ? '● 接管后台运行中的轮次…' : `● ${engineLabel(v)} 运行中…`;
   v.spinner = spinner;
@@ -1779,6 +1902,21 @@ function attachChat(v, ch, { start, fresh } = {}) {
         if (!v.ocMeta) v.ocMeta = {};
         v.ocMeta.mcp = e.mcp || {};
         renderOcChrome(v);
+      } else if (e.type === 'connection' || e.type === 'retry') {
+        // Cursor 的长连接会掉，掉了它自己静默重连（实测单次 2~22 秒）。
+        // 这些事件以前没人接，界面上就是一段无缘无故的死寂 —— 和当初 tool_call
+        // 被忽略是同一类问题：上游有信号，适配器没接。
+        const st = liveState(v);
+        if (e.subtype === 'reconnecting' || e.subtype === 'starting') {
+          if (!st.reconnect) st.reconnect = { attempt: e.attempt || 1, at: Date.now() };
+          else st.reconnect.attempt = e.attempt || st.reconnect.attempt;
+          reconnNote(v, spinner);
+        } else if (e.subtype === 'reconnected') {
+          const took = st.reconnect ? ((Date.now() - st.reconnect.at) / 1000).toFixed(1) : null;
+          st.reconnect = null;
+          reconnNote(v, spinner, took);
+        }
+        spinnerLabel(v, spinner);
       } else if (e.type === 'tool_call') {
         const info = cursorToolInfo(e);
         if (info) {
@@ -1963,7 +2101,7 @@ function modelChoices() {
   const fromSel = [...$('#model-sel').querySelectorAll('option')]
     .filter(o => o.value && o.value !== '__custom__' && !o.hidden)
     .map(o => ({ name: o.value, desc: o.textContent }));
-  const skipExtras = eng === 'cursor' || eng === 'hermes' || eng === 'opencode';
+  const skipExtras = eng === 'cursor' || eng === 'hermes' || eng === 'opencode' || eng === 'codex';
   const provAliases = skipExtras ? [] : providers.map(p => ({ name: 'provider:' + p.id, desc: p.label, alias: p.id }));
   const aliases = skipExtras ? [] : MODEL_ALIASES;
   const seen = new Set(fromSel.map(m => m.name));
@@ -2036,14 +2174,17 @@ $('#input').addEventListener('keydown', (e) => {
 });
 $('#perm-mode').addEventListener('change', () => localStorage.setItem('permMode', $('#perm-mode').value));
 if (localStorage.getItem('permMode')) $('#perm-mode').value = localStorage.getItem('permMode');
+function engineFamily(engine) {
+  return engine === 'cursor' || engine === 'hermes' || engine === 'opencode' || engine === 'codex' ? engine : 'claude';
+}
 function modelStorageKey(engine) {
-  return 'model:' + (engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : engine === 'opencode' ? 'opencode' : 'claude');
+  return 'model:' + engineFamily(engine);
 }
 
 function syncModelSelector(engine) {
-  const eng = engine === 'cursor' ? 'cursor' : engine === 'hermes' ? 'hermes' : engine === 'opencode' ? 'opencode' : 'claude';
+  const eng = engineFamily(engine);
   const sel = $('#model-sel');
-  for (const el of sel.querySelectorAll('.model-claude, .model-cursor, .model-hermes, .model-opencode')) {
+  for (const el of sel.querySelectorAll('.model-claude, .model-cursor, .model-hermes, .model-opencode, .model-codex')) {
     el.hidden = !el.classList.contains('model-' + eng);
   }
   for (const opt of sel.querySelectorAll('option[data-engine]')) {
@@ -2051,9 +2192,15 @@ function syncModelSelector(engine) {
   }
   let saved = localStorage.getItem(modelStorageKey(eng));
   if (!saved && eng === 'claude') saved = localStorage.getItem('model'); // migrate legacy key
+  if (eng === 'opencode' && !localStorage.getItem('model:opencode:migrated-union-alpha')) {
+    if (!saved || saved === 'deepseek/deepseek-v4-pro') saved = 'opencode/union-alpha';
+    localStorage.setItem('model:opencode:migrated-union-alpha', '1');
+    if (saved) localStorage.setItem(modelStorageKey(eng), saved);
+  }
   const pick = (v) => v && [...sel.options].some(o => o.value === v && !o.hidden);
   if (pick(saved)) sel.value = saved;
-  else if (eng === 'opencode' && pick('deepseek/deepseek-v4-pro')) sel.value = 'deepseek/deepseek-v4-pro';
+  else if (eng === 'opencode' && pick('opencode/union-alpha')) sel.value = 'opencode/union-alpha';
+  else if (eng === 'codex' && pick('union-alpha')) sel.value = 'union-alpha';
   else if (!pick(sel.value) || sel.value.startsWith('provider:')) sel.value = '';
 }
 
@@ -2065,7 +2212,7 @@ function addModelOption(id, label, engine) {
   const opt = document.createElement('option');
   opt.value = id;
   opt.textContent = label || id;
-  opt.dataset.engine = eng === 'cursor' ? 'cursor' : eng === 'hermes' ? 'hermes' : eng === 'opencode' ? 'opencode' : 'claude';
+  opt.dataset.engine = engineFamily(eng);
   sel.insertBefore(opt, sel.querySelector('option[value="__custom__"]'));
 }
 
@@ -2096,7 +2243,7 @@ loadProviders();
 // split dropdown value into what chat.start needs; providers never apply to Cursor
 function resolveModelChoice(value, engine) {
   if (!value) return {};
-  if (engine === 'cursor' || engine === 'hermes' || engine === 'opencode') {
+  if (engine === 'cursor' || engine === 'hermes' || engine === 'opencode' || engine === 'codex') {
     if (value.startsWith('provider:')) return {};
     return { model: value };
   }
@@ -2125,6 +2272,8 @@ $('#model-sel').addEventListener('change', () => {
   if (sel.value === '__custom__') {
     const hint = eng === 'cursor'
       ? 'Cursor 模型 ID（如 composer-2.5 / claude-opus-5-thinking-high）:'
+      : eng === 'codex'
+        ? 'Codex 模型 ID（默认 union-alpha）:'
       : '模型 ID 或别名（如 claude-fable-5-1 / opus / fable）:';
     const id = (prompt(hint, '') || '').trim();
     if (!id) { sel.value = localStorage.getItem(key) || localStorage.getItem('model') || ''; return; }
@@ -2346,7 +2495,11 @@ function makeSessionItem(p, s) {
 
   const meta = document.createElement('div');
   meta.className = 'sess-meta';
-  meta.textContent = `${new Date(s.mtimeMs).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${s.msgCount == null ? '长会话' : s.msgCount + ' 条'}`;
+  const when = new Date(s.mtimeMs).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const cnt = s.msgCount == null ? '长会话' : s.msgCount + ' 条';
+  const where = shortProjectPath(p);
+  meta.textContent = where ? `${when} · ${cnt} · ${where}` : `${when} · ${cnt}`;
+  meta.title = p.cwd || p.slug || '';
 
   const hit = contentHits.get(s.id);
   let snip = null;
@@ -2426,21 +2579,21 @@ function scheduleContentSearch() {
   }, 280);
 }
 
-function prettyGroupLabel(p) {
-  const engine = p.engine || 'claude';
-  const raw = String(p.cwd || p.slug || '');
-  if (engine === 'opencode' || engine === 'hermes') return raw;
+/* 分组标题取消后路径得回到行内。引擎已经有 badge 了，这里只留路径本身，
+   不带 "Cursor · " 这类前缀 —— 那正是之前被说"信息搞了两次"的地方。 */
+function shortProjectPath(p) {
+  // opencode/hermes 的 cwd 本身就带 "OpenCode · " / "Hermes · " 前缀，
+  // 而 badge 已经标了引擎 —— 剥掉前缀只留后面的 agent 名（reverse / eval-x…）
+  const raw = String(p.cwd || p.slug || '').replace(/^(OpenCode|Hermes|Cursor|Codex)\s*·\s*/i, '');
+  if (!raw) return '';
   let label = raw
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
     .replace(/^\/root(?=\/|$)/, '~');
   if (label.startsWith('/private/tmp/') || label.startsWith('/tmp/')) {
-    const base = label.split('/').filter(Boolean).pop() || 'tmp';
-    label = '临时 / ' + base;
-  } else if (label === '~' || label === '/') {
-    label = '主目录';
+    return '临时 / ' + (label.split('/').filter(Boolean).pop() || 'tmp');
   }
-  if (engine === 'cursor') return 'Cursor · ' + label;
+  if (label === '~' || label === '/') return '主目录';
   return label;
 }
 
@@ -2478,17 +2631,21 @@ function renderSessionList() {
   }
 
   const pinSet = new Set(pins);
+  /* 非置顶不再按项目路径分组。引擎已经由 badge 标出来，再按路径分一次组
+     等于同一信息占两遍版面，还把「最近在做什么」的时间线切成了几十段。
+     改成跨引擎拍平，纯按最后修改时间倒序。 */
+  const flat = [];
   for (const p of projectsCache) {
-    const sessions = p.sessions.filter(s => match(s) && !pinSet.has(s.id));
-    if (!sessions.length) continue;
+    for (const s of p.sessions) {
+      if (!match(s) || pinSet.has(s.id)) continue;
+      flat.push([p, s]);
+    }
+  }
+  flat.sort((a, b) => (b[1].mtimeMs || 0) - (a[1].mtimeMs || 0));
+  if (flat.length) {
     const g = document.createElement('div');
     g.className = 'proj-group';
-    const name = document.createElement('div');
-    name.className = 'proj-name';
-    name.textContent = prettyGroupLabel(p);
-    name.title = p.cwd || p.slug;
-    g.appendChild(name);
-    for (const s of sessions) g.appendChild(makeSessionItem(p, s));
+    for (const [p, s] of flat) g.appendChild(makeSessionItem(p, s));
     root.appendChild(g);
   }
   if (!root.children.length && q) {
@@ -2536,7 +2693,6 @@ function armSessionFilter() {
 $('#filter-proxy')?.addEventListener('click', armSessionFilter);
 $('#filter-proxy')?.addEventListener('focus', armSessionFilter);
 $('#btn-refresh').addEventListener('click', () => { loadProjects(); loadGraphMeta(); });
-fetch('/mail/api/health').then((r) => { if (r.ok) { const el = $('#btn-mail-board'); if (el) el.hidden = false; } }).catch(() => {});
 loadPins().then(loadProjects).then(() => {
   loadGraphMeta();
   // deep link from a push notification: /?session=<slug>/<id>
@@ -2922,6 +3078,9 @@ $('#btn-new-hermes')?.addEventListener('click', () => {
 });
 $('#btn-new-opencode')?.addEventListener('click', () => {
   newChat('', 'opencode');
+});
+$('#btn-new-codex')?.addEventListener('click', () => {
+  newChat(chatViews.get(currentChatKey)?.cwd || '', 'codex');
 });
 $('#newchat-dialog').addEventListener('close', () => {
   if ($('#newchat-dialog').returnValue === 'ok') {

@@ -11,6 +11,21 @@
   --user-bg: #24211b;
   --err: #c96b5c;
   --mono: "SF Mono", Menlo, Consolas, monospace;
+  --engine-claude: var(--gold-dim);
+  --engine-claude-border: #5a4a28;
+  --engine-claude-hot: var(--gold);
+  --engine-cursor: #7eb8ff;
+  --engine-cursor-border: #3a5070;
+  --engine-cursor-hot: #a8d0ff;
+  --engine-hermes: #c9a0ff;
+  --engine-hermes-border: #5a4070;
+  --engine-hermes-hot: #ddc2ff;
+  --engine-opencode: #f5a24a;
+  --engine-opencode-border: #6a4a28;
+  --engine-opencode-hot: #ffc078;
+  --engine-codex: #3dcc7a;
+  --engine-codex-border: #245a3a;
+  --engine-codex-hot: #6ee7a0;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #app { height: 100%; }
@@ -49,6 +64,16 @@ body {
   border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 12px;
 }
 .side-actions button:hover { border-color: var(--gold-dim); color: var(--gold); }
+.side-actions #btn-new-chat { color: var(--engine-claude); border-color: var(--engine-claude-border); }
+.side-actions #btn-new-chat:hover { color: var(--engine-claude-hot); border-color: var(--engine-claude-hot); }
+.side-actions #btn-new-cursor { color: var(--engine-cursor); border-color: var(--engine-cursor-border); }
+.side-actions #btn-new-cursor:hover { color: var(--engine-cursor-hot); border-color: var(--engine-cursor); }
+.side-actions #btn-new-hermes { color: var(--engine-hermes); border-color: var(--engine-hermes-border); }
+.side-actions #btn-new-hermes:hover { color: var(--engine-hermes-hot); border-color: var(--engine-hermes); }
+.side-actions #btn-new-opencode { color: var(--engine-opencode); border-color: var(--engine-opencode-border); }
+.side-actions #btn-new-opencode:hover { color: var(--engine-opencode-hot); border-color: var(--engine-opencode); }
+.side-actions #btn-new-codex { color: var(--engine-codex); border-color: var(--engine-codex-border); }
+.side-actions #btn-new-codex:hover { color: var(--engine-codex-hot); border-color: var(--engine-codex); }
 .side-actions .side-link {
   padding: 6px 0; background: var(--bg-panel); color: var(--fg);
   border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 12px;
@@ -129,10 +154,11 @@ body {
   flex: 0 0 auto; font-size: 10px; line-height: 1.2; padding: 1px 5px; border-radius: 4px;
   border: 1px solid var(--border); color: var(--fg-dim); letter-spacing: .2px;
 }
-.engine-badge.cursor { color: #7eb8ff; border-color: #3a5070; }
-.engine-badge.claude { color: var(--gold-dim); border-color: #5a4a28; }
-.engine-badge.hermes { color: #c9a0ff; border-color: #5a4070; }
-.engine-badge.opencode { color: #f5a24a; border-color: #6a4a28; }
+.engine-badge.cursor { color: var(--engine-cursor); border-color: var(--engine-cursor-border); }
+.engine-badge.claude { color: var(--engine-claude); border-color: var(--engine-claude-border); }
+.engine-badge.hermes { color: var(--engine-hermes); border-color: var(--engine-hermes-border); }
+.engine-badge.opencode { color: var(--engine-opencode); border-color: var(--engine-opencode-border); }
+.engine-badge.codex { color: var(--engine-codex); border-color: var(--engine-codex-border); }
 .live-dot {
   display: none; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 6px; vertical-align: 1px; flex: 0 0 auto;
@@ -153,7 +179,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .live-working .live-dot { animation: none; }
 }
-.sess-meta { font-size: 11px; color: var(--fg-dim); }
+.sess-meta { font-size: 11px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-snip {
   font-size: 11px; color: var(--gold-dim); margin-top: 2px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -528,11 +554,20 @@ details.tool pre, details.thinking .think-body {
 }
 a.file-chip:hover { border-color: var(--gold-dim); color: var(--gold); }
 .msg-files { display: flex; flex-wrap: wrap; margin-bottom: 8px; }
-#btn-attach {
+#btn-attach, #btn-mic {
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--bg-panel); color: var(--fg-dim); cursor: pointer; line-height: 0;
 }
-#btn-attach:hover { color: var(--gold); border-color: var(--gold-dim); }
+#btn-attach:hover, #btn-mic:hover { color: var(--gold); border-color: var(--gold-dim); }
+#btn-mic.on {
+  color: var(--gold); border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold-dim);
+  animation: micpulse 1.2s ease-in-out infinite;
+}
+@keyframes micpulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--gold-dim); }
+  50% { box-shadow: 0 0 0 4px rgba(201, 164, 92, .28); }
+}
 .msg-images { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .msg-images img {
   max-width: 260px; max-height: 220px; border-radius: 8px;
@@ -775,7 +810,11 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 .gc-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gc-engine { font-family: var(--mono); font-size: 9px; padding: 1px 4px; border-radius: 3px;
   border: 1px solid var(--border); color: var(--fg-dim); margin-left: auto; }
-.gc-engine.opencode { color: #f5a24a; border-color: #6a4a28; }
+.gc-engine.claude { color: var(--engine-claude); border-color: var(--engine-claude-border); }
+.gc-engine.cursor { color: var(--engine-cursor); border-color: var(--engine-cursor-border); }
+.gc-engine.hermes { color: var(--engine-hermes); border-color: var(--engine-hermes-border); }
+.gc-engine.opencode { color: var(--engine-opencode); border-color: var(--engine-opencode-border); }
+.gc-engine.codex { color: var(--engine-codex); border-color: var(--engine-codex-border); }
 .gc-meta, .gc-cwd { font-family: var(--mono); font-size: 10.5px; color: var(--fg-dim); }
 .gc-cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
 .gc-live { color: #39ff88; font-family: var(--mono); font-size: 11.5px; margin: 5px 0; }
@@ -1040,3 +1079,6 @@ dialog button[value=ok] { background: var(--gold); color: #1a1610; border-color:
 @media (prefers-reduced-motion: reduce) {
   #chat-view.busy::before { animation: none; opacity: .4; }
 }
+
+.reconn-line { color: #d08c30; font-family: var(--mono); font-size: 13px; padding: 2px 0; }
+.reconn-line.ok { color: #5a9e6f; }

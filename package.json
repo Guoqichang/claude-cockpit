@@ -26,6 +26,7 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node server.js",
+    "test": "node --test lib/asr-lexicon.test.js lib/asr-proxy.test.js",
     "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {

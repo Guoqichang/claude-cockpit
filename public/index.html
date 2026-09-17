@@ -42,7 +42,7 @@
     </div>
     <div class="side-actions">
       <button id="btn-open-graph">◍ 会话图谱</button>
-      <a id="btn-mail-board" class="side-link" href="/mail/" hidden>校邮看板</a>
+      <button id="btn-new-codex">＋ Codex</button>
     </div>
     <div id="filter-slot">
       <button type="button" id="filter-proxy" class="filter-proxy">筛选标题或对话内容…</button>
@@ -169,11 +169,12 @@
           </li>
         </ol>
         <details class="setup-more">
-          <summary>再接 Claude / Cursor / Hermes（可选）</summary>
+          <summary>再接 Claude / Cursor / Hermes / Codex（可选）</summary>
           <ul>
-            <li><b>Claude Code</b>：装好官方 CLI，保证终端里能敲 <span class="tag">claude</span>，然后点 <span class="tag">＋ Claude</span>。</li>
+            <li><b>Claude Code</b>：装好官方 CLI，保证终端里能敲 <span class="tag">claude</span>，然后点 <span class="tag">＋ Claude</span>。Union Alpha 在模型下拉里的「其他模型（第三方网关）」。</li>
             <li><b>Cursor Agent</b>：本机装过 Cursor 即可。点 <span class="tag">＋ Cursor</span>。</li>
             <li><b>Hermes</b>：本机有 <span class="tag">~/.hermes/state.db</span> 就会出现在侧栏。</li>
+            <li><b>Codex</b>：用 ChatGPT.app 自带的 CLI。点 <span class="tag">＋ Codex</span>，默认走 Union Alpha（经驾驶舱 Zen 兼容层）。</li>
           </ul>
         </details>
         <p class="setup-dismiss"><button type="button" id="setup-skip">先看看界面</button></p>
@@ -237,8 +238,13 @@
                 <option value="GLM-5.1">GLM-5.1</option>
               </optgroup>
               <optgroup id="og-opencode" class="model-opencode" label="OpenCode · reverse" hidden>
+                <option value="opencode/union-alpha">Union Alpha Free（Zen）</option>
+                <option value="openrouter/stealth/union-alpha">Union Alpha（OpenRouter）</option>
                 <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro（官方）</option>
                 <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash</option>
+              </optgroup>
+              <optgroup id="og-codex" class="model-codex" label="Codex CLI · Union Alpha" hidden>
+                <option value="union-alpha">Union Alpha Free（Zen）</option>
               </optgroup>
               <optgroup id="og-cursor" class="model-cursor" label="Cursor Agent" hidden>
                 <option value="composer-2.5">Composer 2.5</option>
@@ -296,6 +302,9 @@
           <button id="btn-attach" title="添加附件">
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10.6 3.2a2.4 2.4 0 0 1 3.4 3.4l-6.3 6.3a3.8 3.8 0 0 1-5.4-5.4l6-6a1 1 0 0 1 1.4 1.4l-6 6a1.8 1.8 0 0 0 2.6 2.6l6.3-6.3a.4.4 0 0 0-.6-.6l-5.6 5.6a1 1 0 1 1-1.4-1.4l5.6-5.6z" fill="currentColor"/></svg>
           </button>
+          <button id="btn-mic" title="语音输入 · Fun-ASR" aria-label="语音输入">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.4a2.3 2.3 0 0 0-2.3 2.3v4.2a2.3 2.3 0 1 0 4.6 0V3.7A2.3 2.3 0 0 0 8 1.4zm-4.2 6.2a.7.7 0 0 0-1.4 0 5.6 5.6 0 0 0 5 5.55V15H5.6a.7.7 0 1 0 0 1.4h4.8a.7.7 0 1 0 0-1.4H8.6v-1.85a5.6 5.6 0 0 0 5-5.55.7.7 0 0 0-1.4 0 4.2 4.2 0 0 1-8.4 0z" fill="currentColor"/></svg>
+          </button>
           <input id="file-input" type="file" multiple hidden>
         </div>
       </div>
@@ -348,6 +357,7 @@
         <option value="cursor">Cursor Agent</option>
         <option value="hermes">Hermes Agent</option>
         <option value="opencode">OpenCode · reverse</option>
+        <option value="codex">Codex CLI</option>
       </select>
     </label>
     <label>工作目录 <input name="cwd" placeholder="/path/to/project"></label>
@@ -366,6 +376,7 @@
 <script src="/vendor/xterm-fit/lib/addon-fit.js"></script>
 <script src="/icons.js"></script>
 <script src="/app.js"></script>
+<script src="/voice.js"></script>
 <script src="/intro.js"></script>
 <script src="/setup.js"></script>
 <script src="/graph.js"></script>
