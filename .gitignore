@@ -31,3 +31,6 @@ API-KEYS.md
 *.db-wal
 models/
 .models/
+
+# 本地生成的一次性报告（含主机名/账号，别进公开仓库）
+report.html
